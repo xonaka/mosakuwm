@@ -9,6 +9,8 @@ import math
 import importlib.util
 from pathlib import Path
 from Xlib import X, XK, display
+from threading import Thread
+import json
 
 def load_config():
     """設定ファイルを読み込む"""
@@ -95,6 +97,61 @@ BACKWARD = 1
 TILE_PATTERN_GRID = 0
 TILE_PATTERN_HORIZONTAL = 1
 TILE_PATTERN_VERTICAL = 2
+
+class WindowAnimation:
+    """ウィンドウアニメーションを管理するクラス"""
+    def __init__(self, window, start_geom, end_geom, duration=0.3, fps=60):
+        self.window = window
+        self.start_geom = start_geom
+        self.end_geom = end_geom
+        self.duration = duration
+        self.interval = 1.0 / fps
+        self.start_time = None
+        
+    def start(self):
+        """アニメーションを開始"""
+        self.start_time = time.time()
+        Thread(target=self._animate).start()
+        
+    def _animate(self):
+        """アニメーションのメインループ"""
+        while True:
+            current_time = time.time()
+            progress = (current_time - self.start_time) / self.duration
+            
+            if progress >= 1:
+                # 最終位置に設定
+                self.window.configure(
+                    x=self.end_geom['x'],
+                    y=self.end_geom['y'],
+                    width=self.end_geom['width'],
+                    height=self.end_geom['height']
+                )
+                break
+                
+            # イージング関数を適用（ease-in-out）
+            t = progress
+            if t < 0.5:
+                progress = 2 * t * t
+            else:
+                t = 2 * t - 1
+                progress = -0.5 * (t * (t - 2) - 1)
+                
+            # 現在の位置とサイズを計算
+            current_x = self.start_geom['x'] + (self.end_geom['x'] - self.start_geom['x']) * progress
+            current_y = self.start_geom['y'] + (self.end_geom['y'] - self.start_geom['y']) * progress
+            current_width = self.start_geom['width'] + (self.end_geom['width'] - self.start_geom['width']) * progress
+            current_height = self.start_geom['height'] + (self.end_geom['height'] - self.start_geom['height']) * progress
+            
+            # ウィンドウを更新
+            self.window.configure(
+                x=int(current_x),
+                y=int(current_y),
+                width=int(current_width),
+                height=int(current_height)
+            )
+            
+            time.sleep(self.interval)
 
 class XdumonPy:
     def __init__(self):
@@ -1004,7 +1061,7 @@ class XdumonPy:
         )
 
     def apply_layout_preset(self, preset_name):
-        """レイアウトプリセットを適用"""
+        """レイアウトプリセットを適用（アニメーション対応）"""
         debug(f'function: apply_layout_preset called with {preset_name}')
         if preset_name not in self.config.LAYOUT_PRESETS:
             return
@@ -1018,17 +1075,50 @@ class XdumonPy:
         if not monitor:
             return
 
-        # プリセットの各ウィンドウを作成
+        # プリセットの各ウィンドウを作成または移動
         for window_config in preset['windows']:
             window_class = window_config['class']
-            command = self.get_command_for_class(window_class)
-            if not command:
-                continue
+            
+            # 既存のウィンドウを探す
+            existing_window = None
+            for window in self.exposed_windows:
+                if self.get_window_class(window) == window_class:
+                    existing_window = window
+                    break
+                
+            if existing_window:
+                # 既存のウィンドウを移動
+                x, y, width, height = self.calculate_window_geometry(
+                    window_config, monitor)
+                self.animate_window_move(existing_window, {
+                    'x': x,
+                    'y': y,
+                    'width': width,
+                    'height': height
+                })
+            else:
+                # 新しいウィンドウを作成
+                command = self.get_command_for_class(window_class)
+                if command:
+                    os.system(f'{command} &')
 
-            # ウィンドウを作成
-            os.system(f'{command} &')
-            # Note: 新しいウィンドウは manage_window で捕捉され、
-            # そこでレイアウトの適用が行われます
+    def animate_window_move(self, window, end_geom):
+        """ウィンドウの移動をアニメーション化"""
+        start_geom = self.get_window_geometry(window)
+        if not start_geom:
+            return
+        
+        # 現在の位置とサイズを辞書形式に変換
+        start_geom = {
+            'x': start_geom.x,
+            'y': start_geom.y,
+            'width': start_geom.width,
+            'height': start_geom.height
+        }
+        
+        # アニメーションを開始
+        animation = WindowAnimation(window, start_geom, end_geom)
+        animation.start()
 
     def get_primary_monitor(self):
         """プライマリモニターを取得"""
@@ -1045,44 +1135,6 @@ class XdumonPy:
             'google-chrome': self.config.BROWSER
         }
         return class_to_command.get(window_class)
-
-    def apply_layout_to_window(self, window):
-        """ウィンドウにレイアウトを適用"""
-        if not self.current_layout:
-            return
-
-        window_class = self.get_window_class(window)
-        if not window_class:
-            return
-
-        preset = self.config.LAYOUT_PRESETS[self.current_layout]
-        for window_config in preset['windows']:
-            if window_config['class'] == window_class:
-                # このウィンドウクラスのレイアウト設定を見つけた
-                if window_class in self.layout_windows:
-                    # 既に配置済みの場合はスキップ
-                    return
-                
-                # ウィンドウを記録
-                self.layout_windows[window_class] = window
-                
-                # モニターの取得
-                monitor = self.get_primary_monitor()
-                if not monitor:
-                    return
-
-                # 位置とサイズの計算
-                x, y, width, height = self.calculate_window_geometry(
-                    window_config, monitor)
-
-                # ウィンドウの設定
-                window.configure(
-                    x=x,
-                    y=y,
-                    width=width,
-                    height=height
-                )
-                break
 
     def calculate_window_geometry(self, window_config, monitor):
         """ウィンドウの位置とサイズを計算"""
@@ -1415,6 +1467,165 @@ LAYOUT_PRESETS = {{
         """レイアウトプリセット削除のコールバック"""
         debug('callback: cb_delete_layout_preset called')
         self.delete_layout_preset(preset_name)
+
+    def show_layout_presets(self):
+        """レイアウトプリセットの一覧を表示"""
+        debug('function: show_layout_presets called')
+        
+        # プリセット情報を収集
+        presets_info = []
+        for name, preset in self.config.LAYOUT_PRESETS.items():
+            presets_info.append({
+                'name': name,
+                'display_name': preset.get('name', name),
+                'description': preset.get('description', ''),
+                'windows': len(preset['windows']),
+                'is_current': name == self.current_layout
+            })
+        
+        # プリセット情報を整形
+        info_text = "レイアウトプリセット一覧:\n\n"
+        for preset in presets_info:
+            current_mark = "* " if preset['is_current'] else "  "
+            info_text += f"{current_mark}{preset['display_name']} ({preset['name']})\n"
+            info_text += f"   説明: {preset['description']}\n"
+            info_text += f"   ウィンドウ数: {preset['windows']}\n\n"
+        
+        # 通知ウィンドウを作成
+        notification = self.screen.root.create_window(
+            10, 10, 400, 300, 0,
+            self.screen.root_depth,
+            X.InputOutput,
+            background_pixel=self.screen.white_pixel,
+            override_redirect=True
+        )
+        
+        # テキストを描画
+        gc = notification.create_gc(
+            foreground=self.screen.black_pixel,
+            background=self.screen.white_pixel
+        )
+        
+        # テキストを行ごとに描画
+        y = 10
+        for line in info_text.split('\n'):
+            notification.draw_text(gc, 10, y, line)
+            y += 20
+        
+        # ウィンドウを表示
+        notification.map()
+        
+        # 3秒後に自動的に閉じる
+        def close_notification():
+            time.sleep(3)
+            notification.destroy()
+        
+        Thread(target=close_notification).start()
+
+    def cb_show_layout_presets(self, event):
+        """レイアウトプリセット一覧表示のコールバック"""
+        debug('callback: cb_show_layout_presets called')
+        self.show_layout_presets()
+
+    def export_layout_presets(self, export_path=None):
+        """レイアウトプリセットをJSONファイルにエクスポート"""
+        debug('function: export_layout_presets called')
+        
+        if not export_path:
+            export_path = Path.home() / '.config' / 'xdumonpy' / 'presets.json'
+        
+        # プリセットをエクスポート用の形式に変換
+        presets_data = {}
+        for name, preset in self.config.LAYOUT_PRESETS.items():
+            presets_data[name] = {
+                'name': preset.get('name', name),
+                'description': preset.get('description', ''),
+                'windows': preset['windows']
+            }
+        
+        # JSONファイルに保存
+        with open(export_path, 'w') as f:
+            json.dump(presets_data, f, indent=4, ensure_ascii=False)
+        
+        debug(f'Layout presets exported to {export_path}')
+
+    def import_layout_presets(self, import_path=None):
+        """レイアウトプリセットをJSONファイルからインポート"""
+        debug('function: import_layout_presets called')
+        
+        if not import_path:
+            import_path = Path.home() / '.config' / 'xdumonpy' / 'presets.json'
+        
+        if not import_path.exists():
+            debug(f'Import file not found: {import_path}')
+            return
+        
+        # JSONファイルを読み込み
+        try:
+            with open(import_path, 'r') as f:
+                presets_data = json.load(f)
+        except json.JSONDecodeError:
+            debug(f'Invalid JSON file: {import_path}')
+            return
+        
+        # 設定ファイルを読み込み
+        config_dir = self.ensure_config_dir()
+        config_file = config_dir / 'config.py'
+        
+        if not config_file.exists():
+            # 新しい設定ファイルを作成
+            config_content = '''#!/usr/bin/env python3
+from Xlib import X
+
+# レイアウトプリセット設定
+LAYOUT_PRESETS = {
+'''
+        else:
+            # 既存の設定ファイルを読み込み
+            with open(config_file, 'r') as f:
+                config_content = f.read()
+            
+            # LAYOUT_PRESETSが存在しない場合は追加
+            if 'LAYOUT_PRESETS = {' not in config_content:
+                config_content += '''
+# レイアウトプリセット設定
+LAYOUT_PRESETS = {
+'''
+        
+        # プリセットを追加
+        for name, preset in presets_data.items():
+            # プリセットの文字列を作成
+            preset_str = f"    '{name}': {{\n"
+            preset_str += f"        'name': '{preset['name']}',\n"
+            preset_str += f"        'description': '{preset['description']}',\n"
+            preset_str += f"        'windows': {preset['windows']}\n"
+            preset_str += "    },\n"
+            
+            # 設定ファイルに追加
+            insert_pos = config_content.find('LAYOUT_PRESETS = {') + len('LAYOUT_PRESETS = {')
+            config_content = (
+                config_content[:insert_pos] + '\n' + preset_str +
+                config_content[insert_pos:]
+            )
+        
+        # 設定ファイルを保存
+        with open(config_file, 'w') as f:
+            f.write(config_content)
+        
+        debug(f'Layout presets imported from {import_path}')
+        
+        # 設定を再読み込み
+        self.reload_config()
+
+    def cb_export_layout_presets(self, event, export_path=None):
+        """レイアウトプリセットのエクスポートコールバック"""
+        debug('callback: cb_export_layout_presets called')
+        self.export_layout_presets(export_path)
+
+    def cb_import_layout_presets(self, event, import_path=None):
+        """レイアウトプリセットのインポートコールバック"""
+        debug('callback: cb_import_layout_presets called')
+        self.import_layout_presets(import_path)
 
 def main():
     wm = XdumonPy()

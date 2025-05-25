@@ -151,11 +151,24 @@ KEY_BINDS = {
     # プリセット管理用の新しいキーバインド
     ('e', X.Mod1Mask | X.ShiftMask): {
         'method': 'cb_edit_layout_preset',
-        'arg': ('coding', 'coding_custom', '新しいコーディングレイアウト')  # 例: codingプリセットを編集
+        'arg': ('coding', 'coding_custom', '新しいコーディングレイアウト')
     },
     ('d', X.Mod1Mask | X.ShiftMask): {
         'method': 'cb_delete_layout_preset',
-        'arg': None  # 現在のレイアウトを削除
+        'arg': None
+    },
+    
+    # プリセット一覧表示用のキーバインド
+    ('p', X.Mod1Mask | X.ShiftMask): {
+        'method': 'cb_show_layout_presets'
+    },
+    
+    # エクスポート・インポート用のキーバインド
+    ('x', X.Mod1Mask | X.ShiftMask): {
+        'method': 'cb_export_layout_presets'
+    },
+    ('i', X.Mod1Mask | X.ShiftMask): {
+        'method': 'cb_import_layout_presets'
     }
 }
 
