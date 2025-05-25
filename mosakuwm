@@ -7,11 +7,22 @@ import re
 import time
 import math
 import importlib.util
+import logging
+import traceback
 from pathlib import Path
 from Xlib import X, XK, display
 from Xlib.ext import randr  # RandR拡張を追加
 from threading import Thread
 import json
+
+# ロガーの設定
+logger = logging.getLogger('mosakuwm')
+logger.setLevel(logging.DEBUG)
+fh = logging.FileHandler('debug.log', mode='w')
+fh.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+fh.setFormatter(formatter)
+logger.addHandler(fh)
 
 def load_config():
     """設定ファイルを読み込む"""
@@ -81,14 +92,28 @@ def load_config():
     return config
 
 def debug(msg):
-    """デバッグメッセージを標準エラー出力に出力"""
+    """デバッグメッセージをログファイルと標準エラー出力に出力"""
+    logger.debug(msg)
     print(msg, file=sys.stderr, flush=True)
+
+def error(msg, exc_info=None):
+    """エラーメッセージをログに出力"""
+    if exc_info:
+        logger.error(f"{msg}\n{traceback.format_exc()}")
+    else:
+        logger.error(msg)
+
+def info(msg):
+    """情報メッセージをログに出力"""
+    logger.info(msg)
 
 # 定数定義
 LEFT = 1
 RIGHT = 2
 UPPER = 4
 LOWER = 8
+HORIZONTAL = 16
+VERTICAL = 32
 
 # 移動方向の定数
 FORWARD = 0
@@ -334,6 +359,7 @@ class MonitorManager:
                 
     def handle_monitor_connected(self, name, monitor):
         """モニター接続時の処理"""
+        debug('handler: handle_monitor_connected called')
         debug(f'Monitor connected: {name}')
         
         # 保存された設定を適用
@@ -356,6 +382,7 @@ class MonitorManager:
                             
     def handle_monitor_disconnected(self, name):
         """モニター切断時の処理"""
+        debug('handler: handle_monitor_disconnected called')
         debug(f'Monitor disconnected: {name}')
         
         # 現在のウィンドウ配置を保存
@@ -403,101 +430,82 @@ class Mosakuwm:
     def __init__(self):
         """初期化"""
         try:
+            self.current_layout = None  # ← ここで先に初期化
             self.display = display.Display()
             self.screen = self.display.screen()
-            
             # RandR拡張を有効化
             try:
                 self.display.xrandr_query_version()
             except Exception as e:
                 print(f"警告: RandR拡張の初期化に失敗しました: {e}")
-            
-            # 他のウィンドウマネージャーが実行中かチェック
+            # 他のウィンドウマネージャーが実行中かチェック＆イベントマスクを一度だけまとめて設定
             try:
                 self.screen.root.change_attributes(
-                    event_mask = X.SubstructureRedirectMask
+                    event_mask = X.SubstructureRedirectMask |
+                    X.SubstructureNotifyMask |
+                    X.EnterWindowMask |
+                    X.LeaveWindowMask |
+                    X.FocusChangeMask |
+                    X.ButtonPressMask |
+                    X.ButtonReleaseMask |
+                    X.PointerMotionMask |
+                    randr.RRScreenChangeNotifyMask
                 )
             except Exception as e:
                 print("エラー: 他のウィンドウマネージャーが実行中です")
                 print("ヒント: 既存のウィンドウマネージャーを終了してから再試行してください")
                 sys.exit(1)
-            
-            # 通常の初期化を続行
-            self.screen.root.change_attributes(
-                event_mask = X.SubstructureRedirectMask |
-                X.SubstructureNotifyMask |
-                X.EnterWindowMask |
-                X.LeaveWindowMask |
-                X.FocusChangeMask |
-                X.ButtonPressMask |
-                X.ButtonReleaseMask |
-                X.PointerMotionMask |
-                randr.RRScreenChangeNotifyMask
-            )
-            
             # 残りの初期化処理
             self.colormap = self.screen.default_colormap
-            
             # 設定の読み込み
             self.config = load_config()
-            
             # キーバインド関連
             self.keybinds = {}
             self.pressed_keys = set()
-            
             # ウィンドウ管理用の辞書とリスト
             self.managed_windows = {}
             self.exposed_windows = []
             self.framed_window = None
-            
             # フレーム関連
             self.frame_windows = {}
             self.special_window = []
-            
             # 仮想スクリーン関連
             self.window_vscreen = {}
             self.current_vscreen = 0
-            
             # ドラッグ操作用の変数
             self.start = None
             self.start_geom = None
             self.last_dragged_time = time.time()
-            
             # モニター情報の初期化
             self.monitor_geometries = self.get_available_monitor_geometries()
             self.maxsize = self.get_screen_size()
-            
             # フレームウィンドウの作成
             self.create_frame_windows()
-            
             # イベントの捕捉を開始
-            self.catch_events()
+            # self.catch_events()  # 不要: 既にroot.change_attributesで設定済み
             self.grab_buttons()
             self.grab_keys()
-            
+            # プリセットマネージャーの初期化
+            self.preset_manager = PresetManager(self)
+            # モニターマネージャーの初期化
+            self.monitor_manager = MonitorManager(self)
             # 既存のウィンドウを管理対象に追加
             for child in self.screen.root.query_tree().children:
-                if child.get_attributes().map_state:
-                    self.manage_window(child)
-            
+                try:
+                    if child.get_attributes().map_state:
+                        self.manage_window(child)
+                except Exception as e:
+                    debug(f'child manage_window error: {e}')
             # タイル配置関連
             self.current_main_ratio = self.config.TILE_RATIOS['main_pane_ratio']
             self.current_tile_pattern = TILE_PATTERN_GRID
-            
             # ウィンドウルール関連
             self.floating_windows = set()  # フローティングウィンドウを保持
-            
             # レイアウト関連
-            self.current_layout = None
             self.layout_windows = {}  # レイアウトに属するウィンドウを保持
-
-            # プリセットマネージャーの初期化
-            self.preset_manager = PresetManager(self)
-            
-            # モニターマネージャーの初期化
-            self.monitor_manager = MonitorManager(self)
         except Exception as e:
             print(f"初期化中にエラーが発生しました: {e}")
+            debug(f"初期化中にエラーが発生しました: {e}")
             sys.exit(1)
 
     def get_screen_size(self):
@@ -659,20 +667,21 @@ class Mosakuwm:
     def grab_buttons(self):
         """マウスボタンのグラブ設定"""
         debug('function: grab_buttons called')
-        # Alt + 左クリックでウィンドウ移動
-        # Alt + 右クリックでウィンドウリサイズ
-        for button in [1, 3]:  # 1: 左クリック, 3: 右クリック
-            self.screen.root.grab_button(
-                button,
-                X.Mod1Mask,  # Alt キー
-                True,
-                X.ButtonPressMask |
-                X.ButtonReleaseMask |
-                X.PointerMotionMask,
-                X.GrabModeAsync,
-                X.GrabModeAsync,
-                X.NONE,
-                X.NONE)
+        for button in [1, 3]:
+            try:
+                self.screen.root.grab_button(
+                    button,
+                    X.Mod1Mask,
+                    True,
+                    X.ButtonPressMask |
+                    X.ButtonReleaseMask |
+                    X.PointerMotionMask,
+                    X.GrabModeAsync,
+                    X.GrabModeAsync,
+                    X.NONE,
+                    X.NONE)
+            except Exception as e:
+                debug(f'grab_button failed: {e}')
 
     def grab_keys(self):
         """キーバインドの設定"""
@@ -682,24 +691,27 @@ class Mosakuwm:
             keycode = self.display.keysym_to_keycode(keysym)
             if modifier is None:
                 continue
-            self.screen.root.grab_key(
-                keycode,
-                modifier,
-                True,
-                X.GrabModeAsync,
-                X.GrabModeAsync
-            )
-            self.keybinds[(keycode, modifier)] = rule
-            debug(f'debug: ({key}, {modifier}) grabbed as ({keycode}, {modifier})')
+            try:
+                self.screen.root.grab_key(
+                    keycode,
+                    modifier,
+                    True,
+                    X.GrabModeAsync,
+                    X.GrabModeAsync
+                )
+                self.keybinds[(keycode, modifier)] = rule
+                debug(f'debug: ({key}, {modifier}) grabbed as ({keycode}, {modifier})')
+            except Exception as e:
+                debug(f'grab_key failed: {e}')
 
     def handle_button_press(self, event):
         """マウスボタンが押された時の処理"""
         debug('handler: handle_button_press called')
         window = event.child
+        if window in self.frame_windows.values():
+            return  # フレーム自体は無視
         if window not in self.managed_windows.keys():
             return
-
-        # ポインタをグラブしてドラッグ操作の準備
         self.screen.root.grab_pointer(
             True,
             X.PointerMotionMask |
@@ -709,7 +721,7 @@ class Mosakuwm:
             X.NONE,
             X.NONE,
             0)
-
+        self.focus_window(window)
         self.start = event
         self.start_geom = self.get_window_geometry(window)
 
@@ -726,39 +738,31 @@ class Mosakuwm:
         debug('handler: handle_motion_notify called')
         if self.start is None or self.start.child == X.NONE:
             return
-
-        # ドラッグ更新の間隔制御
         now = time.time()
         if now - self.last_dragged_time < self.config.DRAG_INTERVAL:
             return
         self.last_dragged_time = now
-
-        # マウスの移動量を計算
         xdiff = event.root_x - self.start.root_x
         ydiff = event.root_y - self.start.root_y
-
-        if self.start.detail == 1:  # 左クリックドラッグ: 移動
+        if event.child in self.frame_windows.values():
+            return  # フレーム自体は無視
+        if self.start.detail == 1:
             self.start.child.configure(
                 x=self.start_geom.x + xdiff,
                 y=self.start_geom.y + ydiff
             )
-            self.draw_frame_windows()  # フレームも一緒に移動
-        elif self.start.detail == 3:  # 右クリックドラッグ: リサイズ
-            # 最小サイズのチェック
+        elif self.start.detail == 3:
             new_width = self.start_geom.width + xdiff
             new_height = self.start_geom.height + ydiff
-            
             if new_width <= self.config.WINDOW_MIN_WIDTH or new_height <= self.config.WINDOW_MIN_HEIGHT:
                 return
-                
             self.start.child.configure(
                 width=new_width,
                 height=new_height
             )
-            self.draw_frame_windows()  # フレームもリサイズ
+        self.draw_frame_windows()
 
     def manage_window(self, window):
-        """新しいウィンドウを管理対象に追加（自動ルール対応）"""
         attrs = self.get_window_attributes(window)
         if window in self.managed_windows.keys():
             return
@@ -766,33 +770,20 @@ class Mosakuwm:
             return
         if attrs.override_redirect:
             return
-            
+        geom = self.get_window_geometry(window)
+        if not geom:
+            return
+        # フレーム化・reparentをやめる
         self.managed_windows[window] = self.get_monitor_geometry_with_window(window)
         self.exposed_windows.append(window)
         self.window_vscreen[window] = self.current_vscreen
-        
-        # ウィンドウルールの適用
         self.apply_window_rules(window)
-        
-        # レイアウトの適用
-        self.apply_layout(window)  # apply_layout_to_windowをapply_layoutに変更
-        
-        # 自動ルールのチェック
-        window_class = self.get_window_class(window)
-        monitor = self.managed_windows.get(window)
-        monitor_name = next((name for name, geom in self.monitor_geometries.items()
-                            if geom == monitor), None)
-        
-        from datetime import datetime
-        current_time = datetime.now().strftime('%H:%M')
-        
-        preset_name = self.preset_manager.check_auto_rules(
-            window_class, monitor_name, current_time)
-        
-        if preset_name:
-            self.apply_layout_preset(preset_name)
-        
-        window.map()
+        self.apply_layout(window)
+        window.map()  # ここでmap
+        window.change_attributes(
+            event_mask=X.EnterWindowMask | X.LeaveWindowMask
+        )
+        window.configure(stack_mode=X.Above)
 
     def get_window_attributes(self, window):
         """ウィンドウの属性を取得"""
@@ -852,8 +843,12 @@ class Mosakuwm:
         debug('function: focus_window called')
         if window not in self.exposed_windows:
             return
-            
-        window.set_input_focus(X.RevertToParent, 0)
+        try:
+            attrs = window.get_attributes()
+            if attrs and attrs.map_state:
+                window.set_input_focus(X.RevertToParent, 0)
+        except Exception as e:
+            debug(f'focus_window error: {e}')
         window.configure(stack_mode=X.Above)
         self.framed_window = window
         self.draw_frame_windows()
@@ -913,33 +908,38 @@ class Mosakuwm:
     def loop(self):
         """メインイベントループ"""
         while True:
-            event = self.display.next_event()
-            if event.type == X.MapRequest:
-                self.handle_map_request(event)
-            elif event.type == X.DestroyNotify:
-                self.handle_destroy_notify(event)
-            elif event.type == X.ButtonPress:
-                self.handle_button_press(event)
-            elif event.type == X.ButtonRelease:
-                self.handle_button_release(event)
-            elif event.type == X.MotionNotify:
-                self.handle_motion_notify(event)
-            elif event.type == X.KeyPress:
-                self.handle_key_press(event)
-            # XRandRのイベント処理を修正
             try:
-                if hasattr(self.display.extension_event, 'RRScreenChangeNotify') and \
-                   event.type == self.display.extension_event.RRScreenChangeNotify:
-                    self.handle_randr_notify(event)
-            except AttributeError:
-                pass  # XRandR拡張が利用できない場合は無視
+                event = self.display.next_event()
+                debug(f"event received: {event.type}")
+                if event.type == X.MapRequest:
+                    self.handle_map_request(event)
+                elif event.type == X.DestroyNotify:
+                    self.handle_destroy_notify(event)
+                elif event.type == X.ButtonPress:
+                    self.handle_button_press(event)
+                elif event.type == X.ButtonRelease:
+                    self.handle_button_release(event)
+                elif event.type == X.MotionNotify:
+                    self.handle_motion_notify(event)
+                elif event.type == X.KeyPress:
+                    self.handle_key_press(event)
+                try:
+                    if hasattr(self.display.extension_event, 'RRScreenChangeNotify') and \
+                       event.type == self.display.extension_event.RRScreenChangeNotify:
+                        self.handle_randr_notify(event)
+                except AttributeError:
+                    pass
+            except Exception as e:
+                debug(f'event loop error: {e}')
 
     def handle_map_request(self, event):
         """新しいウィンドウが作成された時のハンドラ"""
+        debug('handler: handle_map_request called')
         self.manage_window(event.window)
 
     def handle_destroy_notify(self, event):
         """ウィンドウが破棄された時のハンドラ"""
+        debug('handler: handle_destroy_notify called')
         if event.window in self.managed_windows:
             self.managed_windows.pop(event.window)
             if event.window in self.exposed_windows:
@@ -986,10 +986,12 @@ class Mosakuwm:
         """フレームウィンドウの作成"""
         debug('function: create_frame_windows called')
         self.frame_pixel = self.colormap.alloc_named_color(self.config.FRAME_COLOR).pixel
-        
         for side in ['left', 'right', 'upper', 'lower']:
+            # サイズ・位置は後でdraw_frame_windowsで調整するので仮でOK
             window = self.screen.root.create_window(
-                0, 0, 16, 16, 0,
+                0, 0, self.config.FRAME_THICKNESS if side in ['left', 'right'] else 16,
+                self.config.FRAME_THICKNESS if side in ['upper', 'lower'] else 16,
+                0,
                 self.screen.root_depth,
                 X.InputOutput,
                 background_pixel=self.frame_pixel,
@@ -1002,23 +1004,17 @@ class Mosakuwm:
         """フレームウィンドウの描画"""
         if self.framed_window is None:
             return
-
         # フレームの色を設定
         if self.framed_window in self.special_window:
             new_frame_pixel = self.colormap.alloc_named_color(self.config.FRAME_SPECIAL_COLOR).pixel
         else:
             new_frame_pixel = self.colormap.alloc_named_color(self.config.FRAME_COLOR).pixel
-
-        # 各フレームの色を更新
         for side in ['left', 'right', 'upper', 'lower']:
             self.frame_windows[side].change_attributes(background_pixel=new_frame_pixel)
             self.frame_windows[side].clear_area(0, 0, 0, 0, True)
-
-        # フレームの位置とサイズを設定
         geom = self.get_window_geometry(self.framed_window)
         if geom is None:
             return
-
         for side in ['left', 'right', 'upper', 'lower']:
             x, y, width, height = 0, 0, 0, 0
             if side == 'left':
@@ -1041,7 +1037,6 @@ class Mosakuwm:
                 y = geom.y + geom.height - self.config.FRAME_THICKNESS
                 width = geom.width
                 height = self.config.FRAME_THICKNESS
-
             self.frame_windows[side].configure(
                 x=x,
                 y=y,
@@ -1072,43 +1067,48 @@ class Mosakuwm:
             return (tmp, tmp+1)
         return (tmp+1, tmp+1)
 
+    def set_window_to_stack_top(self, window):
+        """ウィンドウをexposed_windowsの先頭に移動し、X上でも最前面に"""
+        if window not in self.exposed_windows:
+            return
+        idx = self.exposed_windows.index(window)
+        self.exposed_windows.pop(idx)
+        self.exposed_windows.insert(0, window)
+        window.configure(stack_mode=X.Above)
+
     def tile_windows(self, window, pattern=TILE_PATTERN_GRID):
         """ウィンドウをタイル状に配置"""
         debug('function: tile_windows called')
         self.current_tile_pattern = pattern
-        
         # 現在のモニターを取得
         monitor = self.managed_windows.get(window, None)
         if monitor is None:
             return
-
         # 現在のモニターに表示されているウィンドウを収集（フローティング以外）
         target_windows = []
         for win in self.exposed_windows:
             if (monitor == self.managed_windows.get(win, None) and
                 win not in self.floating_windows):
                 target_windows.append(win)
-
         # ウィンドウをIDでソート（安定した配置のため）
         def sort_key(window):
             return window.id
         target_windows.sort(key=sort_key)
-
         # エディタウィンドウを優先的に配置
         eidx = None
         for i in range(len(target_windows)):
             if self.config.PRIORITY_WINDOW in self.get_window_class(target_windows[i]).lower():
                 eidx = i
-
         if pattern == TILE_PATTERN_GRID:
             self.tile_windows_grid(target_windows, monitor, eidx)
         elif pattern == TILE_PATTERN_HORIZONTAL:
             self.tile_windows_horizontal(target_windows, monitor, eidx)
         elif pattern == TILE_PATTERN_VERTICAL:
             self.tile_windows_vertical(target_windows, monitor, eidx)
-
         # ポインタを移動
         window.warp_pointer(self.config.INIT_PTR_POS, self.config.INIT_PTR_POS)
+        # スタック最上位に移動
+        self.set_window_to_stack_top(window)
 
     def tile_windows_grid(self, target_windows, monitor, eidx):
         """グリッドパターンでウィンドウを配置"""
@@ -2054,6 +2054,37 @@ LAYOUT_PRESETS = {
         
         # レイアウト管理用の辞書に追加
         self.layout_windows[window] = window_config
+
+    def maximize_window(self, window, mask):
+        if window not in self.exposed_windows:
+            return
+        monitor = self.managed_windows.get(window, None)
+        if monitor is None:
+            return
+        geom = self.get_window_geometry(window)
+        x = geom.x
+        y = geom.y
+        width = geom.width
+        height = geom.height
+        if mask & VERTICAL != 0:
+            y = monitor['y']
+            height = monitor['height']
+        if mask & HORIZONTAL != 0:
+            x = monitor['x']
+            width = monitor['width']
+        window.configure(
+            x=x,
+            y=y,
+            width=width,
+            height=height)
+
+    def cb_maximize_window(self, event, mask=HORIZONTAL|VERTICAL):
+        debug('callback: cb_maximize_window called')
+        window = self.framed_window
+        if window:
+            self.maximize_window(window, mask)
+            window.warp_pointer(self.config.INIT_PTR_POS, self.config.INIT_PTR_POS)
+            self.draw_frame_windows()
 
 def main():
     wm = Mosakuwm()

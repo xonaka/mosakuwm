@@ -190,7 +190,11 @@ KEY_BINDS = {
             'monitor': 'HDMI-1',
             'time_range': ['09:00', '17:00']
         })
-    }
+    },
+    ('m', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_maximize_window',
+        'arg': 16 | 32  # HORIZONTAL | VERTICAL
+    },
 }
 
 # パフォーマンス設定
