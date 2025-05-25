@@ -8,27 +8,39 @@ import time
 import math
 from Xlib import X, XK, display
 
-# 基本的な設定
-INIT_PTR_POS = 30  # マウスポインタの初期位置
-WINDOW_MIN_WIDTH = 1920/8  # ウィンドウの最小幅
-WINDOW_MIN_HEIGHT = 1280/8  # ウィンドウの最小高さ
-DRAG_INTERVAL = 1/60  # ドラッグ更新の間隔（秒）
+# 設定ファイルのインポート
+try:
+    import config as cfg
+except ImportError:
+    print("設定ファイルが見つかりません。デフォルト設定を使用します。", file=sys.stderr)
+    # デフォルト設定
+    class cfg:
+        # アプリケーション設定
+        TERMINAL = 'urxvt'
+        EDITOR = 'emacs'
+        BROWSER = 'google-chrome'
+        PRIORITY_WINDOW = EDITOR
 
-# フレームの設定
-FRAME_COLOR = 'SteelBlue3'  # 通常のフレーム色
-FRAME_SPECIAL_COLOR = 'orange'  # 特別なウィンドウのフレーム色
-FRAME_THICKNESS = 2  # フレームの太さ
+        # ウィンドウ設定
+        WINDOW_MIN_WIDTH = 1920/8
+        WINDOW_MIN_HEIGHT = 1280/8
+        INIT_PTR_POS = 30
 
-# アプリケーション設定
-TERMINAL = 'urxvt'  # 端末エミュレータ
-EDITOR = 'emacs'    # エディタ
-BROWSER = 'google-chrome'  # ブラウザ
-PRIORITY_WINDOW = EDITOR  # タイル配置時に優先するウィンドウ
+        # フレーム設定
+        FRAME_COLOR = 'SteelBlue3'
+        FRAME_SPECIAL_COLOR = 'orange'
+        FRAME_THICKNESS = 2
 
-# 仮想スクリーンの設定
-MAX_VSCREEN = 4  # 仮想スクリーンの最大数
+        # 仮想スクリーン設定
+        MAX_VSCREEN = 4
 
-# ウィンドウの方向を示す定数
+        # キーバインド設定
+        KEY_BINDS = {}
+
+        # パフォーマンス設定
+        DRAG_INTERVAL = 1/60
+
+# 定数定義
 LEFT = 1
 RIGHT = 2
 UPPER = 4
@@ -39,85 +51,9 @@ FORWARD = 0
 BACKWARD = 1
 
 # タイル配置パターンの定数
-TILE_PATTERN_GRID = 0    # グリッド配置
-TILE_PATTERN_HORIZONTAL = 1  # 水平分割
-TILE_PATTERN_VERTICAL = 2    # 垂直分割
-
-# キーバインドの定義
-KEY_BINDS = {
-    ('i', X.Mod1Mask | X.ControlMask): {
-        'method': 'cb_focus_next_window',
-        'arg': FORWARD
-    },
-    ('1', X.Mod1Mask | X.ControlMask): {
-        'command': f'{TERMINAL} &'
-    },
-    ('2', X.Mod1Mask | X.ControlMask): {
-        'command': f'{EDITOR} &'
-    },
-    ('3', X.Mod1Mask | X.ControlMask): {
-        'command': f'{BROWSER} &'
-    },
-    ('h', X.Mod1Mask | X.ControlMask): {
-        'method': 'cb_halve_window',
-        'arg': LEFT
-    },
-    ('l', X.Mod1Mask | X.ControlMask): {
-        'method': 'cb_halve_window',
-        'arg': RIGHT
-    },
-    ('j', X.Mod1Mask | X.ControlMask): {
-        'method': 'cb_halve_window',
-        'arg': LOWER
-    },
-    ('k', X.Mod1Mask | X.ControlMask): {
-        'method': 'cb_halve_window',
-        'arg': UPPER
-    },
-    ('n', X.Mod1Mask | X.ControlMask): {
-        'method': 'cb_move_window_to_next_monitor'
-    },
-    ('F1', X.Mod1Mask): {
-        'method': 'cb_select_vscreen',
-        'arg': 0
-    },
-    ('F2', X.Mod1Mask): {
-        'method': 'cb_select_vscreen',
-        'arg': 1
-    },
-    ('F3', X.Mod1Mask): {
-        'method': 'cb_select_vscreen',
-        'arg': 2
-    },
-    ('F4', X.Mod1Mask): {
-        'method': 'cb_select_vscreen',
-        'arg': 3
-    },
-    ('d', X.Mod1Mask | X.ControlMask): {
-        'method': 'cb_send_window_to_next_vscreen',
-        'arg': FORWARD
-    },
-    ('a', X.Mod1Mask | X.ControlMask): {
-        'method': 'cb_send_window_to_next_vscreen',
-        'arg': BACKWARD
-    },
-    ('t', X.Mod1Mask | X.ControlMask): {
-        'method': 'cb_tile_windows',
-        'arg': TILE_PATTERN_GRID
-    },
-    ('h', X.Mod1Mask | X.ShiftMask): {
-        'method': 'cb_tile_windows',
-        'arg': TILE_PATTERN_HORIZONTAL
-    },
-    ('v', X.Mod1Mask | X.ShiftMask): {
-        'method': 'cb_tile_windows',
-        'arg': TILE_PATTERN_VERTICAL
-    }
-}
-
-def debug(msg):
-    """デバッグメッセージを標準エラー出力に出力"""
-    print(msg, file=sys.stderr, flush=True)
+TILE_PATTERN_GRID = 0
+TILE_PATTERN_HORIZONTAL = 1
+TILE_PATTERN_VERTICAL = 2
 
 class XdumonPy:
     def __init__(self):
@@ -130,22 +66,22 @@ class XdumonPy:
         self.pressed_keys = set()
         
         # ウィンドウ管理用の辞書とリスト
-        self.managed_windows = {}  # 管理対象のウィンドウを保持
-        self.exposed_windows = []  # 表示中のウィンドウを保持
-        self.framed_window = None  # 現在フォーカスのあるウィンドウ
+        self.managed_windows = {}
+        self.exposed_windows = []
+        self.framed_window = None
         
         # フレーム関連
-        self.frame_windows = {}  # フレームウィンドウを保持
-        self.special_window = []  # 特別扱いするウィンドウを保持
+        self.frame_windows = {}
+        self.special_window = []
         
         # 仮想スクリーン関連
-        self.window_vscreen = {}  # ウィンドウと仮想スクリーンの対応を保持
-        self.current_vscreen = 0  # 現在の仮想スクリーン番号
+        self.window_vscreen = {}
+        self.current_vscreen = 0
         
         # ドラッグ操作用の変数
-        self.start = None  # ドラッグ開始時のイベント情報
-        self.start_geom = None  # ドラッグ開始時のウィンドウジオメトリ
-        self.last_dragged_time = time.time()  # 最後のドラッグ更新時刻
+        self.start = None
+        self.start_geom = None
+        self.last_dragged_time = time.time()
         
         # モニター情報の初期化
         self.monitor_geometries = self.get_available_monitor_geometries()
@@ -339,7 +275,7 @@ class XdumonPy:
     def grab_keys(self):
         """キーバインドの設定"""
         debug('function: grab_keys called')
-        for (key, modifier), rule in KEY_BINDS.items():
+        for (key, modifier), rule in cfg.KEY_BINDS.items():
             keysym = XK.string_to_keysym(key)
             keycode = self.display.keysym_to_keycode(keysym)
             if modifier is None:
@@ -391,7 +327,7 @@ class XdumonPy:
 
         # ドラッグ更新の間隔制御
         now = time.time()
-        if now - self.last_dragged_time < DRAG_INTERVAL:
+        if now - self.last_dragged_time < cfg.DRAG_INTERVAL:
             return
         self.last_dragged_time = now
 
@@ -410,7 +346,7 @@ class XdumonPy:
             new_width = self.start_geom.width + xdiff
             new_height = self.start_geom.height + ydiff
             
-            if new_width <= WINDOW_MIN_WIDTH or new_height <= WINDOW_MIN_HEIGHT:
+            if new_width <= cfg.WINDOW_MIN_WIDTH or new_height <= cfg.WINDOW_MIN_HEIGHT:
                 return
                 
             self.start.child.configure(
@@ -486,7 +422,7 @@ class XdumonPy:
             
         next_window = self.exposed_windows[idx]
         self.focus_window(next_window)
-        next_window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+        next_window.warp_pointer(cfg.INIT_PTR_POS, cfg.INIT_PTR_POS)
 
     def focus_window(self, window):
         """指定したウィンドウにフォーカスを設定"""
@@ -506,7 +442,7 @@ class XdumonPy:
             return
             
         self.halve_window(self.framed_window, direction)
-        self.framed_window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+        self.framed_window.warp_pointer(cfg.INIT_PTR_POS, cfg.INIT_PTR_POS)
 
     def halve_window(self, window, direction):
         """ウィンドウを指定した方向に半分のサイズにする"""
@@ -517,9 +453,9 @@ class XdumonPy:
         if not geom:
             return
             
-        if direction & (LEFT | RIGHT) != 0 and geom.width <= WINDOW_MIN_WIDTH:
+        if direction & (LEFT | RIGHT) != 0 and geom.width <= cfg.WINDOW_MIN_WIDTH:
             return
-        if direction & (UPPER | LOWER) != 0 and geom.height <= WINDOW_MIN_HEIGHT:
+        if direction & (UPPER | LOWER) != 0 and geom.height <= cfg.WINDOW_MIN_HEIGHT:
             return
             
         x, y = geom.x, geom.y
@@ -549,7 +485,7 @@ class XdumonPy:
             return
             
         self.move_window_to_next_monitor(self.framed_window)
-        self.framed_window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+        self.framed_window.warp_pointer(cfg.INIT_PTR_POS, cfg.INIT_PTR_POS)
 
     def loop(self):
         """メインイベントループ"""
@@ -587,7 +523,7 @@ class XdumonPy:
     def select_vscreen(self, num):
         """指定した仮想スクリーンに切り替え"""
         debug('function: select_vscreen called')
-        if num < 0 or num >= MAX_VSCREEN:
+        if num < 0 or num >= cfg.MAX_VSCREEN:
             return
 
         self.current_vscreen = num
@@ -609,9 +545,9 @@ class XdumonPy:
 
         current_idx = self.window_vscreen[window]
         if direction == FORWARD:
-            next_idx = (current_idx + 1) % MAX_VSCREEN
+            next_idx = (current_idx + 1) % cfg.MAX_VSCREEN
         else:
-            next_idx = (current_idx - 1) % MAX_VSCREEN
+            next_idx = (current_idx - 1) % cfg.MAX_VSCREEN
 
         self.window_vscreen[window] = next_idx
         return next_idx
@@ -619,7 +555,7 @@ class XdumonPy:
     def create_frame_windows(self):
         """フレームウィンドウの作成"""
         debug('function: create_frame_windows called')
-        self.frame_pixel = self.colormap.alloc_named_color(FRAME_COLOR).pixel
+        self.frame_pixel = self.colormap.alloc_named_color(cfg.FRAME_COLOR).pixel
         
         for side in ['left', 'right', 'upper', 'lower']:
             window = self.screen.root.create_window(
@@ -639,9 +575,9 @@ class XdumonPy:
 
         # フレームの色を設定
         if self.framed_window in self.special_window:
-            new_frame_pixel = self.colormap.alloc_named_color(FRAME_SPECIAL_COLOR).pixel
+            new_frame_pixel = self.colormap.alloc_named_color(cfg.FRAME_SPECIAL_COLOR).pixel
         else:
-            new_frame_pixel = self.colormap.alloc_named_color(FRAME_COLOR).pixel
+            new_frame_pixel = self.colormap.alloc_named_color(cfg.FRAME_COLOR).pixel
 
         # 各フレームの色を更新
         for side in ['left', 'right', 'upper', 'lower']:
@@ -658,23 +594,23 @@ class XdumonPy:
             if side == 'left':
                 x = geom.x
                 y = geom.y
-                width = FRAME_THICKNESS
+                width = cfg.FRAME_THICKNESS
                 height = geom.height
             elif side == 'right':
-                x = geom.x + geom.width - FRAME_THICKNESS
+                x = geom.x + geom.width - cfg.FRAME_THICKNESS
                 y = geom.y
-                width = FRAME_THICKNESS
+                width = cfg.FRAME_THICKNESS
                 height = geom.height
             elif side == 'upper':
                 x = geom.x
                 y = geom.y
                 width = geom.width
-                height = FRAME_THICKNESS
+                height = cfg.FRAME_THICKNESS
             elif side == 'lower':
                 x = geom.x
-                y = geom.y + geom.height - FRAME_THICKNESS
+                y = geom.y + geom.height - cfg.FRAME_THICKNESS
                 width = geom.width
-                height = FRAME_THICKNESS
+                height = cfg.FRAME_THICKNESS
 
             self.frame_windows[side].configure(
                 x=x,
@@ -728,7 +664,7 @@ class XdumonPy:
         # エディタウィンドウを優先的に配置
         eidx = None
         for i in range(len(target_windows)):
-            if PRIORITY_WINDOW in self.get_window_class(target_windows[i]).lower():
+            if cfg.PRIORITY_WINDOW in self.get_window_class(target_windows[i]).lower():
                 eidx = i
 
         if pattern == TILE_PATTERN_GRID:
@@ -739,7 +675,7 @@ class XdumonPy:
             self.tile_windows_vertical(target_windows, monitor, eidx)
 
         # ポインタを移動
-        window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+        window.warp_pointer(cfg.INIT_PTR_POS, cfg.INIT_PTR_POS)
 
     def tile_windows_grid(self, target_windows, monitor, eidx):
         """グリッドパターンでウィンドウを配置"""
