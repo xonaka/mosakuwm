@@ -11,11 +11,18 @@ INIT_PTR_POS = 30  # マウスポインタの初期位置
 WINDOW_MIN_WIDTH = 1920/8  # ウィンドウの最小幅
 WINDOW_MIN_HEIGHT = 1280/8  # ウィンドウの最小高さ
 
+# 仮想スクリーンの設定
+MAX_VSCREEN = 4  # 仮想スクリーンの最大数
+
 # ウィンドウの方向を示す定数
 LEFT = 1
 RIGHT = 2
 UPPER = 4
 LOWER = 8
+
+# 移動方向の定数
+FORWARD = 0
+BACKWARD = 1
 
 def debug(msg):
     """デバッグメッセージを標準エラー出力に出力"""
@@ -30,6 +37,10 @@ class XdumonPy:
         # ウィンドウ管理用の辞書とリスト
         self.managed_windows = {}  # 管理対象のウィンドウを保持
         self.exposed_windows = []  # 表示中のウィンドウを保持
+        
+        # 仮想スクリーン関連
+        self.window_vscreen = {}  # ウィンドウと仮想スクリーンの対応を保持
+        self.current_vscreen = 0  # 現在の仮想スクリーン番号
         
         # モニター情報の初期化
         self.monitor_geometries = self.get_available_monitor_geometries()
@@ -206,6 +217,8 @@ class XdumonPy:
             
         self.managed_windows[window] = self.get_monitor_geometry_with_window(window)
         self.exposed_windows.append(window)
+        # 新規ウィンドウを現在の仮想スクリーンに割り当て
+        self.window_vscreen[window] = self.current_vscreen
         window.map()
 
     def get_window_attributes(self, window):
@@ -242,6 +255,40 @@ class XdumonPy:
             self.managed_windows.pop(event.window)
             if event.window in self.exposed_windows:
                 self.exposed_windows.remove(event.window)
+            if event.window in self.window_vscreen:
+                self.window_vscreen.pop(event.window)
+
+    def select_vscreen(self, num):
+        """指定した仮想スクリーンに切り替え"""
+        debug('function: select_vscreen called')
+        if num < 0 or num >= MAX_VSCREEN:
+            return
+
+        self.current_vscreen = num
+        self.exposed_windows = []
+
+        # 現在の仮想スクリーンに属するウィンドウのみを表示
+        for window in self.managed_windows.keys():
+            if self.window_vscreen[window] == num:
+                window.map()
+                self.exposed_windows.append(window)
+            else:
+                window.unmap()
+
+    def send_window_to_next_vscreen(self, window, direction):
+        """ウィンドウを次または前の仮想スクリーンに移動"""
+        debug('function: send_window_to_next_vscreen called')
+        if window not in self.exposed_windows:
+            return None
+
+        current_idx = self.window_vscreen[window]
+        if direction == FORWARD:
+            next_idx = (current_idx + 1) % MAX_VSCREEN
+        else:
+            next_idx = (current_idx - 1) % MAX_VSCREEN
+
+        self.window_vscreen[window] = next_idx
+        return next_idx
 
 def main():
     wm = XdumonPy()
