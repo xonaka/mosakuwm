@@ -17,7 +17,7 @@ def load_config():
     # 設定ファイルの検索順序
     config_paths = [
         Path.cwd() / 'config.py',  # カレントディレクトリ
-        Path.home() / '.config' / 'xdumonpy' / 'config.py',  # ユーザー設定
+        Path.home() / '.config' / 'mosakuwm' / 'config.py',  # ユーザー設定
     ]
 
     # デフォルト設定
@@ -169,7 +169,7 @@ class PresetManager:
     def load_preset_metadata(self):
         """プリセットのメタデータを読み込み"""
         self.metadata = {}
-        metadata_path = Path.home() / '.config' / 'xdumonpy' / 'preset_metadata.json'
+        metadata_path = Path.home() / '.config' / 'mosakuwm' / 'preset_metadata.json'
         
         if metadata_path.exists():
             try:
@@ -189,7 +189,7 @@ class PresetManager:
 
     def save_preset_metadata(self):
         """プリセットのメタデータを保存"""
-        metadata_path = Path.home() / '.config' / 'xdumonpy' / 'preset_metadata.json'
+        metadata_path = Path.home() / '.config' / 'mosakuwm' / 'preset_metadata.json'
         with open(metadata_path, 'w') as f:
             json.dump(self.metadata, f, indent=4, ensure_ascii=False)
 
@@ -398,7 +398,7 @@ class MonitorManager:
         self.monitor_configs[monitor_name]['layout_preset'] = preset_name
         self.save_monitor_configs()
 
-class XdumonPy:
+class Mosakuwm:
     def __init__(self):
         self.display = display.Display()
         self.screen = self.display.screen()
@@ -1458,7 +1458,7 @@ class XdumonPy:
 
     def ensure_config_dir(self):
         """設定ディレクトリの存在を確認し、必要に応じて作成"""
-        config_dir = Path.home() / '.config' / 'xdumonpy'
+        config_dir = Path.home() / '.config' / 'mosakuwm'
         if not config_dir.exists():
             config_dir.mkdir(parents=True)
         return config_dir
@@ -1802,7 +1802,7 @@ LAYOUT_PRESETS = {{
         debug('function: export_layout_presets called')
         
         if not export_path:
-            export_path = Path.home() / '.config' / 'xdumonpy' / 'presets.json'
+            export_path = Path.home() / '.config' / 'mosakuwm' / 'presets.json'
         
         # プリセットをエクスポート用の形式に変換
         presets_data = {}
@@ -1824,7 +1824,7 @@ LAYOUT_PRESETS = {{
         debug('function: import_layout_presets called')
         
         if not import_path:
-            import_path = Path.home() / '.config' / 'xdumonpy' / 'presets.json'
+            import_path = Path.home() / '.config' / 'mosakuwm' / 'presets.json'
         
         if not import_path.exists():
             debug(f'Import file not found: {import_path}')
@@ -1967,7 +1967,7 @@ LAYOUT_PRESETS = {
         self.monitor_manager.update_monitors()
 
 def main():
-    wm = XdumonPy()
+    wm = Mosakuwm()
     try:
         wm.loop()
     except KeyboardInterrupt:
