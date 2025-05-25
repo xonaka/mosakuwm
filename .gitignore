@@ -7,4 +7,42 @@
 # エディタのバックアップファイルなども一般的に無視
 *.swp
 *.swo
-.DS_Store 
+.DS_Store
+
+# Pythonの一般的な無視ファイル
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ログファイル
+*.log
+debug.log
+logs/
+
+# エディタの一時ファイル
+.vscode/
+.idea/
+*~
+
+# 環境設定
+.env
+.venv
+venv/
+ENV/ 
