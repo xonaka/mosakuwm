@@ -38,6 +38,11 @@ LOWER = 8
 FORWARD = 0
 BACKWARD = 1
 
+# タイル配置パターンの定数
+TILE_PATTERN_GRID = 0    # グリッド配置
+TILE_PATTERN_HORIZONTAL = 1  # 水平分割
+TILE_PATTERN_VERTICAL = 2    # 垂直分割
+
 # キーバインドの定義
 KEY_BINDS = {
     ('i', X.Mod1Mask | X.ControlMask): {
@@ -97,7 +102,16 @@ KEY_BINDS = {
         'arg': BACKWARD
     },
     ('t', X.Mod1Mask | X.ControlMask): {
-        'method': 'cb_tile_windows'
+        'method': 'cb_tile_windows',
+        'arg': TILE_PATTERN_GRID
+    },
+    ('h', X.Mod1Mask | X.ShiftMask): {
+        'method': 'cb_tile_windows',
+        'arg': TILE_PATTERN_HORIZONTAL
+    },
+    ('v', X.Mod1Mask | X.ShiftMask): {
+        'method': 'cb_tile_windows',
+        'arg': TILE_PATTERN_VERTICAL
     }
 }
 
@@ -692,7 +706,7 @@ class XdumonPy:
             return (tmp, tmp+1)
         return (tmp+1, tmp+1)
 
-    def tile_windows(self, window):
+    def tile_windows(self, window, pattern=TILE_PATTERN_GRID):
         """ウィンドウをタイル状に配置"""
         debug('function: tile_windows called')
         # 現在のモニターを取得
@@ -716,6 +730,21 @@ class XdumonPy:
         for i in range(len(target_windows)):
             if PRIORITY_WINDOW in self.get_window_class(target_windows[i]).lower():
                 eidx = i
+
+        if pattern == TILE_PATTERN_GRID:
+            self.tile_windows_grid(target_windows, monitor, eidx)
+        elif pattern == TILE_PATTERN_HORIZONTAL:
+            self.tile_windows_horizontal(target_windows, monitor, eidx)
+        elif pattern == TILE_PATTERN_VERTICAL:
+            self.tile_windows_vertical(target_windows, monitor, eidx)
+
+        # ポインタを移動
+        window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+
+    def tile_windows_grid(self, target_windows, monitor, eidx):
+        """グリッドパターンでウィンドウを配置"""
+        if not target_windows:
+            return
 
         # レイアウトの計算
         nrows, ncols = self.get_tile_layout(len(target_windows))
@@ -753,15 +782,64 @@ class XdumonPy:
                     height=height
                 )
 
-        # ポインタを移動
-        window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+    def tile_windows_horizontal(self, target_windows, monitor, eidx):
+        """水平分割パターンでウィンドウを配置"""
+        if not target_windows:
+            return
 
-    def cb_tile_windows(self, event):
+        # エディタウィンドウを最上部に配置
+        if eidx is not None:
+            target_windows[eidx], target_windows[0] = \
+                target_windows[0], target_windows[eidx]
+
+        num_windows = len(target_windows)
+        for i, win in enumerate(target_windows):
+            # 位置とサイズの計算
+            x = monitor['x']
+            y = monitor['y'] + (monitor['height'] * i) // num_windows
+            width = monitor['width']
+            height = monitor['height'] // num_windows
+
+            # ウィンドウの設定
+            win.configure(
+                x=x,
+                y=y,
+                width=width,
+                height=height
+            )
+
+    def tile_windows_vertical(self, target_windows, monitor, eidx):
+        """垂直分割パターンでウィンドウを配置"""
+        if not target_windows:
+            return
+
+        # エディタウィンドウを最左部に配置
+        if eidx is not None:
+            target_windows[eidx], target_windows[0] = \
+                target_windows[0], target_windows[eidx]
+
+        num_windows = len(target_windows)
+        for i, win in enumerate(target_windows):
+            # 位置とサイズの計算
+            x = monitor['x'] + (monitor['width'] * i) // num_windows
+            y = monitor['y']
+            width = monitor['width'] // num_windows
+            height = monitor['height']
+
+            # ウィンドウの設定
+            win.configure(
+                x=x,
+                y=y,
+                width=width,
+                height=height
+            )
+
+    def cb_tile_windows(self, event, pattern=TILE_PATTERN_GRID):
         """タイル配置のコールバック"""
         debug('callback: cb_tile_windows called')
         if not self.framed_window:
             return
-        self.tile_windows(self.framed_window)
+        self.tile_windows(self.framed_window, pattern)
         self.focus_window(self.framed_window)
 
     def get_window_class(self, window):
