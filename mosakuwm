@@ -9,6 +9,7 @@ import math
 import importlib.util
 from pathlib import Path
 from Xlib import X, XK, display
+from Xlib.ext import randr  # RandR拡張を追加
 from threading import Thread
 import json
 
@@ -400,68 +401,104 @@ class MonitorManager:
 
 class Mosakuwm:
     def __init__(self):
-        self.display = display.Display()
-        self.screen = self.display.screen()
-        self.colormap = self.screen.default_colormap
-        
-        # 設定の読み込み
-        self.config = load_config()
-        
-        # キーバインド関連
-        self.keybinds = {}
-        self.pressed_keys = set()
-        
-        # ウィンドウ管理用の辞書とリスト
-        self.managed_windows = {}
-        self.exposed_windows = []
-        self.framed_window = None
-        
-        # フレーム関連
-        self.frame_windows = {}
-        self.special_window = []
-        
-        # 仮想スクリーン関連
-        self.window_vscreen = {}
-        self.current_vscreen = 0
-        
-        # ドラッグ操作用の変数
-        self.start = None
-        self.start_geom = None
-        self.last_dragged_time = time.time()
-        
-        # モニター情報の初期化
-        self.monitor_geometries = self.get_available_monitor_geometries()
-        self.maxsize = self.get_screen_size()
-        
-        # フレームウィンドウの作成
-        self.create_frame_windows()
-        
-        # イベントの捕捉を開始
-        self.catch_events()
-        self.grab_buttons()
-        self.grab_keys()
-        
-        # 既存のウィンドウを管理対象に追加
-        for child in self.screen.root.query_tree().children:
-            if child.get_attributes().map_state:
-                self.manage_window(child)
-        
-        # タイル配置関連
-        self.current_main_ratio = self.config.TILE_RATIOS['main_pane_ratio']
-        self.current_tile_pattern = TILE_PATTERN_GRID
-        
-        # ウィンドウルール関連
-        self.floating_windows = set()  # フローティングウィンドウを保持
-        
-        # レイアウト関連
-        self.current_layout = None
-        self.layout_windows = {}  # レイアウトに属するウィンドウを保持
+        """初期化"""
+        try:
+            self.display = display.Display()
+            self.screen = self.display.screen()
+            
+            # RandR拡張を有効化
+            try:
+                self.display.xrandr_query_version()
+            except Exception as e:
+                print(f"警告: RandR拡張の初期化に失敗しました: {e}")
+            
+            # 他のウィンドウマネージャーが実行中かチェック
+            try:
+                self.screen.root.change_attributes(
+                    event_mask = X.SubstructureRedirectMask
+                )
+            except Exception as e:
+                print("エラー: 他のウィンドウマネージャーが実行中です")
+                print("ヒント: 既存のウィンドウマネージャーを終了してから再試行してください")
+                sys.exit(1)
+            
+            # 通常の初期化を続行
+            self.screen.root.change_attributes(
+                event_mask = X.SubstructureRedirectMask |
+                X.SubstructureNotifyMask |
+                X.EnterWindowMask |
+                X.LeaveWindowMask |
+                X.FocusChangeMask |
+                X.ButtonPressMask |
+                X.ButtonReleaseMask |
+                X.PointerMotionMask |
+                randr.RRScreenChangeNotifyMask
+            )
+            
+            # 残りの初期化処理
+            self.colormap = self.screen.default_colormap
+            
+            # 設定の読み込み
+            self.config = load_config()
+            
+            # キーバインド関連
+            self.keybinds = {}
+            self.pressed_keys = set()
+            
+            # ウィンドウ管理用の辞書とリスト
+            self.managed_windows = {}
+            self.exposed_windows = []
+            self.framed_window = None
+            
+            # フレーム関連
+            self.frame_windows = {}
+            self.special_window = []
+            
+            # 仮想スクリーン関連
+            self.window_vscreen = {}
+            self.current_vscreen = 0
+            
+            # ドラッグ操作用の変数
+            self.start = None
+            self.start_geom = None
+            self.last_dragged_time = time.time()
+            
+            # モニター情報の初期化
+            self.monitor_geometries = self.get_available_monitor_geometries()
+            self.maxsize = self.get_screen_size()
+            
+            # フレームウィンドウの作成
+            self.create_frame_windows()
+            
+            # イベントの捕捉を開始
+            self.catch_events()
+            self.grab_buttons()
+            self.grab_keys()
+            
+            # 既存のウィンドウを管理対象に追加
+            for child in self.screen.root.query_tree().children:
+                if child.get_attributes().map_state:
+                    self.manage_window(child)
+            
+            # タイル配置関連
+            self.current_main_ratio = self.config.TILE_RATIOS['main_pane_ratio']
+            self.current_tile_pattern = TILE_PATTERN_GRID
+            
+            # ウィンドウルール関連
+            self.floating_windows = set()  # フローティングウィンドウを保持
+            
+            # レイアウト関連
+            self.current_layout = None
+            self.layout_windows = {}  # レイアウトに属するウィンドウを保持
 
-        # プリセットマネージャーの初期化
-        self.preset_manager = PresetManager(self)
-        
-        # モニターマネージャーの初期化
-        self.monitor_manager = MonitorManager(self)
+            # プリセットマネージャーの初期化
+            self.preset_manager = PresetManager(self)
+            
+            # モニターマネージャーの初期化
+            self.monitor_manager = MonitorManager(self)
+        except Exception as e:
+            print(f"初期化中にエラーが発生しました: {e}")
+            sys.exit(1)
 
     def get_screen_size(self):
         """スクリーン全体のサイズを取得"""
@@ -616,7 +653,7 @@ class Mosakuwm:
             X.ButtonPressMask |
             X.ButtonReleaseMask |
             X.PointerMotionMask |
-            X.RRScreenChangeNotifyMask  # RandRイベントを追加
+            randr.RRScreenChangeNotifyMask  # 既に修正済み
         )
 
     def grab_buttons(self):
@@ -738,7 +775,7 @@ class Mosakuwm:
         self.apply_window_rules(window)
         
         # レイアウトの適用
-        self.apply_layout_to_window(window)
+        self.apply_layout(window)  # apply_layout_to_windowをapply_layoutに変更
         
         # 自動ルールのチェック
         window_class = self.get_window_class(window)
