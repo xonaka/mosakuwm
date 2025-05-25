@@ -57,6 +57,9 @@ def load_config():
         WINDOW_RULES = {}
         WINDOW_POSITIONS = {}
 
+        # レイアウトプリセット設定
+        LAYOUT_PRESETS = {}
+
     config = DefaultConfig
 
     # 設定ファイルの読み込み
@@ -147,6 +150,10 @@ class XdumonPy:
         
         # ウィンドウルール関連
         self.floating_windows = set()  # フローティングウィンドウを保持
+        
+        # レイアウト関連
+        self.current_layout = None
+        self.layout_windows = {}  # レイアウトに属するウィンドウを保持
 
     def get_screen_size(self):
         """スクリーン全体のサイズを取得"""
@@ -419,6 +426,9 @@ class XdumonPy:
         
         # ウィンドウルールの適用
         self.apply_window_rules(window)
+        
+        # レイアウトの適用
+        self.apply_layout_to_window(window)
         
         window.map()
 
@@ -992,6 +1002,143 @@ class XdumonPy:
             x=x,
             y=y
         )
+
+    def apply_layout_preset(self, preset_name):
+        """レイアウトプリセットを適用"""
+        debug(f'function: apply_layout_preset called with {preset_name}')
+        if preset_name not in self.config.LAYOUT_PRESETS:
+            return
+
+        preset = self.config.LAYOUT_PRESETS[preset_name]
+        self.current_layout = preset_name
+        self.layout_windows.clear()
+
+        # 現在のモニターを取得
+        monitor = self.get_primary_monitor()
+        if not monitor:
+            return
+
+        # プリセットの各ウィンドウを作成
+        for window_config in preset['windows']:
+            window_class = window_config['class']
+            command = self.get_command_for_class(window_class)
+            if not command:
+                continue
+
+            # ウィンドウを作成
+            os.system(f'{command} &')
+            # Note: 新しいウィンドウは manage_window で捕捉され、
+            # そこでレイアウトの適用が行われます
+
+    def get_primary_monitor(self):
+        """プライマリモニターを取得"""
+        for monitor in self.monitor_geometries.values():
+            if monitor.get('primary', False):
+                return monitor
+        return list(self.monitor_geometries.values())[0] if self.monitor_geometries else None
+
+    def get_command_for_class(self, window_class):
+        """ウィンドウクラスに対応するコマンドを取得"""
+        class_to_command = {
+            'urxvt': self.config.TERMINAL,
+            'emacs': self.config.EDITOR,
+            'google-chrome': self.config.BROWSER
+        }
+        return class_to_command.get(window_class)
+
+    def apply_layout_to_window(self, window):
+        """ウィンドウにレイアウトを適用"""
+        if not self.current_layout:
+            return
+
+        window_class = self.get_window_class(window)
+        if not window_class:
+            return
+
+        preset = self.config.LAYOUT_PRESETS[self.current_layout]
+        for window_config in preset['windows']:
+            if window_config['class'] == window_class:
+                # このウィンドウクラスのレイアウト設定を見つけた
+                if window_class in self.layout_windows:
+                    # 既に配置済みの場合はスキップ
+                    return
+                
+                # ウィンドウを記録
+                self.layout_windows[window_class] = window
+                
+                # モニターの取得
+                monitor = self.get_primary_monitor()
+                if not monitor:
+                    return
+
+                # 位置とサイズの計算
+                x, y, width, height = self.calculate_window_geometry(
+                    window_config, monitor)
+
+                # ウィンドウの設定
+                window.configure(
+                    x=x,
+                    y=y,
+                    width=width,
+                    height=height
+                )
+                break
+
+    def calculate_window_geometry(self, window_config, monitor):
+        """ウィンドウの位置とサイズを計算"""
+        position = window_config['position']
+        ratio = window_config.get('ratio', 1.0)
+        split = window_config.get('split', 'horizontal')
+
+        # 基本サイズの計算
+        if split == 'vertical':
+            width = int(monitor['width'] * ratio)
+            height = monitor['height']
+        else:
+            width = monitor['width']
+            height = int(monitor['height'] * ratio)
+
+        # 位置の計算
+        if position == 'left':
+            x = monitor['x']
+            y = monitor['y']
+        elif position == 'right':
+            x = monitor['x'] + monitor['width'] - width
+            y = monitor['y']
+        elif position == 'top':
+            x = monitor['x']
+            y = monitor['y']
+        elif position == 'bottom':
+            x = monitor['x']
+            y = monitor['y'] + monitor['height'] - height
+        elif position == 'top_left':
+            x = monitor['x']
+            y = monitor['y']
+        elif position == 'top_right':
+            x = monitor['x'] + monitor['width'] - width
+            y = monitor['y']
+        elif position == 'bottom_left':
+            x = monitor['x']
+            y = monitor['y'] + monitor['height'] - height
+        elif position == 'bottom_right':
+            x = monitor['x'] + monitor['width'] - width
+            y = monitor['y'] + monitor['height'] - height
+        else:  # center
+            x = monitor['x'] + (monitor['width'] - width) // 2
+            y = monitor['y'] + (monitor['height'] - height) // 2
+
+        return x, y, width, height
+
+    def cb_apply_layout_preset(self, event, preset_name):
+        """レイアウトプリセット適用のコールバック"""
+        debug('callback: cb_apply_layout_preset called')
+        self.apply_layout_preset(preset_name)
+
+    def cb_save_layout_preset(self, event):
+        """現在のレイアウトをプリセットとして保存"""
+        debug('callback: cb_save_layout_preset called')
+        # TODO: 現在のレイアウトを保存する機能を実装
+        pass
 
 def main():
     wm = XdumonPy()

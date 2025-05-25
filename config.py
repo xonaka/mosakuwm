@@ -129,6 +129,23 @@ KEY_BINDS = {
     # 設定再読み込み
     ('R', X.Mod1Mask | X.ControlMask | X.ShiftMask): {
         'method': 'cb_reload_config'
+    },
+    
+    # レイアウトプリセット
+    ('1', X.Mod1Mask | X.ShiftMask): {
+        'method': 'cb_apply_layout_preset',
+        'arg': 'coding'
+    },
+    ('2', X.Mod1Mask | X.ShiftMask): {
+        'method': 'cb_apply_layout_preset',
+        'arg': 'web'
+    },
+    ('3', X.Mod1Mask | X.ShiftMask): {
+        'method': 'cb_apply_layout_preset',
+        'arg': 'terminal'
+    },
+    ('s', X.Mod1Mask | X.ShiftMask): {
+        'method': 'cb_save_layout_preset'
     }
 }
 
@@ -176,4 +193,67 @@ WINDOW_POSITIONS = {
     'top_right': {'x': '100%', 'y': 0},
     'bottom_left': {'x': 0, 'y': '100%'},
     'bottom_right': {'x': '100%', 'y': '100%'},
+}
+
+# レイアウトプリセット設定
+LAYOUT_PRESETS = {
+    'coding': {
+        'name': 'コーディング',
+        'description': 'エディタメイン、ターミナル2分割',
+        'windows': [
+            {
+                'class': 'emacs',
+                'ratio': 0.6,
+                'position': 'left'
+            },
+            {
+                'class': 'urxvt',
+                'ratio': 0.4,
+                'split': 'vertical',  # 垂直分割
+                'position': 'right'
+            }
+        ]
+    },
+    'web': {
+        'name': 'ウェブ開発',
+        'description': 'ブラウザとエディタの水平分割',
+        'windows': [
+            {
+                'class': 'google-chrome',
+                'ratio': 0.7,
+                'position': 'top'
+            },
+            {
+                'class': 'emacs',
+                'ratio': 0.3,
+                'position': 'bottom'
+            }
+        ]
+    },
+    'terminal': {
+        'name': 'ターミナル作業',
+        'description': '4分割ターミナル',
+        'windows': [
+            {
+                'class': 'urxvt',
+                'ratio': 0.5,
+                'position': 'top_left'
+            },
+            {
+                'class': 'urxvt',
+                'ratio': 0.5,
+                'position': 'top_right'
+            },
+            {
+                'class': 'urxvt',
+                'ratio': 0.5,
+                'position': 'bottom_left'
+            },
+            {
+                'class': 'urxvt',
+                'ratio': 0.5,
+                'position': 'bottom_right'
+            }
+        ]
+    }
 } 
