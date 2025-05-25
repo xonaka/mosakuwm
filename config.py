@@ -169,6 +169,27 @@ KEY_BINDS = {
     },
     ('i', X.Mod1Mask | X.ShiftMask): {
         'method': 'cb_import_layout_presets'
+    },
+    
+    # 新しいプリセット管理用のキーバインド
+    ('f', X.Mod1Mask | X.ShiftMask): {
+        'method': 'cb_show_preset_search'  # プリセット検索
+    },
+    ('c', X.Mod1Mask | X.ShiftMask): {
+        'method': 'cb_set_preset_category',  # カテゴリ設定
+        'arg': ('coding', 'coding')  # (プリセット名, カテゴリ)
+    },
+    ('r', X.Mod1Mask | X.ShiftMask): {
+        'method': 'cb_set_preset_priority',  # 優先度設定
+        'arg': ('coding', 1)  # (プリセット名, 優先度)
+    },
+    ('a', X.Mod1Mask | X.ShiftMask): {
+        'method': 'cb_add_auto_rule',  # 自動ルール追加
+        'arg': ('coding', {
+            'window_class': 'emacs',
+            'monitor': 'HDMI-1',
+            'time_range': ['09:00', '17:00']
+        })
     }
 }
 

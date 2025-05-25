@@ -153,6 +153,141 @@ class WindowAnimation:
             
             time.sleep(self.interval)
 
+class PresetManager:
+    """レイアウトプリセットを管理するクラス"""
+    def __init__(self, wm):
+        self.wm = wm
+        self.categories = {
+            'coding': '開発環境',
+            'web': 'ウェブ作業',
+            'office': 'オフィス作業',
+            'media': 'メディア',
+            'custom': 'カスタム'
+        }
+        self.load_preset_metadata()
+
+    def load_preset_metadata(self):
+        """プリセットのメタデータを読み込み"""
+        self.metadata = {}
+        metadata_path = Path.home() / '.config' / 'xdumonpy' / 'preset_metadata.json'
+        
+        if metadata_path.exists():
+            try:
+                with open(metadata_path, 'r') as f:
+                    self.metadata = json.load(f)
+            except json.JSONDecodeError:
+                debug('Invalid metadata file')
+        
+        # メタデータの初期化
+        for name in self.wm.config.LAYOUT_PRESETS:
+            if name not in self.metadata:
+                self.metadata[name] = {
+                    'category': 'custom',
+                    'priority': 0,
+                    'auto_rules': []
+                }
+
+    def save_preset_metadata(self):
+        """プリセットのメタデータを保存"""
+        metadata_path = Path.home() / '.config' / 'xdumonpy' / 'preset_metadata.json'
+        with open(metadata_path, 'w') as f:
+            json.dump(self.metadata, f, indent=4, ensure_ascii=False)
+
+    def search_presets(self, query):
+        """プリセットを検索"""
+        results = []
+        query = query.lower()
+        
+        for name, preset in self.wm.config.LAYOUT_PRESETS.items():
+            score = 0
+            metadata = self.metadata.get(name, {})
+            
+            # 名前とカテゴリでの検索
+            if query in name.lower():
+                score += 3
+            if query in preset.get('name', '').lower():
+                score += 2
+            if query in preset.get('description', '').lower():
+                score += 1
+            if query in self.categories.get(metadata.get('category'), '').lower():
+                score += 1
+            
+            if score > 0:
+                results.append({
+                    'name': name,
+                    'score': score,
+                    'priority': metadata.get('priority', 0),
+                    'category': metadata.get('category', 'custom')
+                })
+        
+        # スコアと優先度でソート
+        results.sort(key=lambda x: (-x['score'], -x['priority']))
+        return results
+
+    def set_preset_category(self, preset_name, category):
+        """プリセットのカテゴリを設定"""
+        if preset_name not in self.metadata:
+            self.metadata[preset_name] = {}
+        self.metadata[preset_name]['category'] = category
+        self.save_preset_metadata()
+
+    def set_preset_priority(self, preset_name, priority):
+        """プリセットの優先度を設定"""
+        if preset_name not in self.metadata:
+            self.metadata[preset_name] = {}
+        self.metadata[preset_name]['priority'] = priority
+        self.save_preset_metadata()
+
+    def add_auto_rule(self, preset_name, rule):
+        """プリセットの自動適用ルールを追加"""
+        if preset_name not in self.metadata:
+            self.metadata[preset_name] = {}
+        if 'auto_rules' not in self.metadata[preset_name]:
+            self.metadata[preset_name]['auto_rules'] = []
+        self.metadata[preset_name]['auto_rules'].append(rule)
+        self.save_preset_metadata()
+
+    def remove_auto_rule(self, preset_name, rule_index):
+        """プリセットの自動適用ルールを削除"""
+        if (preset_name in self.metadata and
+            'auto_rules' in self.metadata[preset_name] and
+            0 <= rule_index < len(self.metadata[preset_name]['auto_rules'])):
+            del self.metadata[preset_name]['auto_rules'][rule_index]
+            self.save_preset_metadata()
+
+    def check_auto_rules(self, window_class, monitor_name=None, time_range=None):
+        """自動適用ルールをチェック"""
+        best_preset = None
+        max_priority = -1
+        
+        for preset_name, metadata in self.metadata.items():
+            if preset_name not in self.wm.config.LAYOUT_PRESETS:
+                continue
+                
+            for rule in metadata.get('auto_rules', []):
+                if self._match_rule(rule, window_class, monitor_name, time_range):
+                    priority = metadata.get('priority', 0)
+                    if priority > max_priority:
+                        max_priority = priority
+                        best_preset = preset_name
+        
+        return best_preset
+
+    def _match_rule(self, rule, window_class, monitor_name, time_range):
+        """ルールがマッチするかチェック"""
+        if 'window_class' in rule and rule['window_class'] != window_class:
+            return False
+            
+        if 'monitor' in rule and monitor_name and rule['monitor'] != monitor_name:
+            return False
+            
+        if 'time_range' in rule and time_range:
+            start, end = rule['time_range']
+            if not (start <= time_range <= end):
+                return False
+                
+        return True
+
 class XdumonPy:
     def __init__(self):
         self.display = display.Display()
@@ -211,6 +346,9 @@ class XdumonPy:
         # レイアウト関連
         self.current_layout = None
         self.layout_windows = {}  # レイアウトに属するウィンドウを保持
+
+        # プリセットマネージャーの初期化
+        self.preset_manager = PresetManager(self)
 
     def get_screen_size(self):
         """スクリーン全体のサイズを取得"""
@@ -468,7 +606,7 @@ class XdumonPy:
             self.draw_frame_windows()  # フレームもリサイズ
 
     def manage_window(self, window):
-        """新しいウィンドウを管理対象に追加"""
+        """新しいウィンドウを管理対象に追加（自動ルール対応）"""
         attrs = self.get_window_attributes(window)
         if window in self.managed_windows.keys():
             return
@@ -486,6 +624,21 @@ class XdumonPy:
         
         # レイアウトの適用
         self.apply_layout_to_window(window)
+        
+        # 自動ルールのチェック
+        window_class = self.get_window_class(window)
+        monitor = self.managed_windows.get(window)
+        monitor_name = next((name for name, geom in self.monitor_geometries.items()
+                            if geom == monitor), None)
+        
+        from datetime import datetime
+        current_time = datetime.now().strftime('%H:%M')
+        
+        preset_name = self.preset_manager.check_auto_rules(
+            window_class, monitor_name, current_time)
+        
+        if preset_name:
+            self.apply_layout_preset(preset_name)
         
         window.map()
 
@@ -1626,6 +1779,70 @@ LAYOUT_PRESETS = {
         """レイアウトプリセットのインポートコールバック"""
         debug('callback: cb_import_layout_presets called')
         self.import_layout_presets(import_path)
+
+    def show_preset_search(self):
+        """プリセット検索ウィンドウを表示"""
+        # 検索ウィンドウを作成
+        search_win = self.screen.root.create_window(
+            10, 10, 500, 400, 0,
+            self.screen.root_depth,
+            X.InputOutput,
+            background_pixel=self.screen.white_pixel,
+            override_redirect=True
+        )
+        
+        # 検索結果を表示
+        gc = search_win.create_gc(
+            foreground=self.screen.black_pixel,
+            background=self.screen.white_pixel
+        )
+        
+        # カテゴリごとにプリセットを表示
+        y = 10
+        for category, category_name in self.preset_manager.categories.items():
+            search_win.draw_text(gc, 10, y, f"【{category_name}】")
+            y += 20
+            
+            # カテゴリに属するプリセットを検索
+            presets = [
+                (name, preset) for name, preset in self.config.LAYOUT_PRESETS.items()
+                if self.preset_manager.metadata.get(name, {}).get('category') == category
+            ]
+            
+            # 優先度でソート
+            presets.sort(key=lambda x: -self.preset_manager.metadata.get(x[0], {}).get('priority', 0))
+            
+            for name, preset in presets:
+                metadata = self.preset_manager.metadata.get(name, {})
+                priority = metadata.get('priority', 0)
+                auto_rules = len(metadata.get('auto_rules', []))
+                
+                current_mark = "* " if name == self.current_layout else "  "
+                search_win.draw_text(gc, 20, y,
+                    f"{current_mark}{preset.get('name', name)} "
+                    f"(優先度: {priority}, 自動ルール: {auto_rules}件)")
+                y += 15
+                
+                if preset.get('description'):
+                    search_win.draw_text(gc, 40, y, f"説明: {preset['description']}")
+                    y += 20
+            
+            y += 10
+        
+        # ウィンドウを表示
+        search_win.map()
+        
+        # 10秒後に自動的に閉じる
+        def close_search():
+            time.sleep(10)
+            search_win.destroy()
+        
+        Thread(target=close_search).start()
+
+    def cb_show_preset_search(self, event):
+        """プリセット検索表示のコールバック"""
+        debug('callback: cb_show_preset_search called')
+        self.show_preset_search()
 
 def main():
     wm = XdumonPy()
