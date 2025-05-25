@@ -1134,11 +1134,137 @@ class XdumonPy:
         debug('callback: cb_apply_layout_preset called')
         self.apply_layout_preset(preset_name)
 
-    def cb_save_layout_preset(self, event):
+    def ensure_config_dir(self):
+        """設定ディレクトリの存在を確認し、必要に応じて作成"""
+        config_dir = Path.home() / '.config' / 'xdumonpy'
+        if not config_dir.exists():
+            config_dir.mkdir(parents=True)
+        return config_dir
+
+    def save_layout_preset(self):
         """現在のレイアウトをプリセットとして保存"""
+        debug('function: save_layout_preset called')
+        
+        # 現在のウィンドウ情報を収集
+        windows_info = []
+        for window in self.exposed_windows:
+            if window in self.floating_windows:
+                continue
+            
+            window_class = self.get_window_class(window)
+            if not window_class:
+                continue
+            
+            geom = self.get_window_geometry(window)
+            if not geom:
+                continue
+            
+            # モニター情報を取得
+            monitor = self.managed_windows.get(window)
+            if not monitor:
+                continue
+            
+            # ウィンドウの相対位置とサイズを計算
+            rel_x = (geom.x - monitor['x']) / monitor['width']
+            rel_y = (geom.y - monitor['y']) / monitor['height']
+            rel_width = geom.width / monitor['width']
+            rel_height = geom.height / monitor['height']
+            
+            # 位置の特定
+            position = 'custom'
+            if rel_x == 0 and rel_y == 0:
+                if rel_width == 1 and rel_height == 1:
+                    position = 'full'
+                elif rel_width < 1 and rel_height == 1:
+                    position = 'left'
+                elif rel_height < 1:
+                    position = 'top_left'
+            elif rel_x + rel_width == 1 and rel_y == 0:
+                if rel_height == 1:
+                    position = 'right'
+                else:
+                    position = 'top_right'
+            elif rel_x == 0 and rel_y + rel_height == 1:
+                position = 'bottom_left'
+            elif rel_x + rel_width == 1 and rel_y + rel_height == 1:
+                position = 'bottom_right'
+            
+            # 分割方向の特定
+            split = 'horizontal'
+            if rel_width < 1 and rel_height == 1:
+                split = 'vertical'
+            
+            windows_info.append({
+                'class': window_class,
+                'ratio': max(rel_width, rel_height),
+                'position': position,
+                'split': split
+            })
+        
+        if not windows_info:
+            debug('No windows to save')
+            return
+        
+        # プリセット名を生成（現在の日時を使用）
+        from datetime import datetime
+        preset_name = f'layout_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+        
+        # プリセットを作成
+        new_preset = {
+            'name': preset_name,
+            'description': f'保存されたレイアウト ({len(windows_info)}ウィンドウ)',
+            'windows': windows_info
+        }
+        
+        # 設定ファイルを読み込み
+        config_dir = self.ensure_config_dir()
+        config_file = config_dir / 'config.py'
+        
+        if not config_file.exists():
+            # 新しい設定ファイルを作成
+            config_content = f'''#!/usr/bin/env python3
+from Xlib import X
+
+# レイアウトプリセット設定
+LAYOUT_PRESETS = {{
+    '{preset_name}': {new_preset}
+}}
+'''
+        else:
+            # 既存の設定ファイルを読み込み
+            with open(config_file, 'r') as f:
+                config_content = f.read()
+            
+            # LAYOUT_PRESETSが存在するか確認
+            if 'LAYOUT_PRESETS = {' in config_content:
+                # 既存のプリセットに新しいプリセットを追加
+                insert_pos = config_content.find('LAYOUT_PRESETS = {') + len('LAYOUT_PRESETS = {')
+                config_content = (
+                    config_content[:insert_pos] + f"\n    '{preset_name}': {new_preset}," +
+                    config_content[insert_pos:]
+                )
+            else:
+                # LAYOUT_PRESETSを新規作成
+                config_content += f'''
+# レイアウトプリセット設定
+LAYOUT_PRESETS = {{
+    '{preset_name}': {new_preset}
+}}
+'''
+        
+        # 設定ファイルを保存
+        with open(config_file, 'w') as f:
+            f.write(config_content)
+        
+        debug(f'Layout preset saved as {preset_name}')
+        
+        # 設定を再読み込み
+        self.reload_config()
+
+    def cb_save_layout_preset(self, event):
+        """現在のレイアウトをプリセットとして保存するコールバック"""
         debug('callback: cb_save_layout_preset called')
-        # TODO: 現在のレイアウトを保存する機能を実装
-        pass
+        self.save_layout_preset()
 
 def main():
     wm = XdumonPy()
