@@ -124,6 +124,11 @@ KEY_BINDS = {
     },
     ('r', X.Mod1Mask | X.ControlMask): {
         'method': 'cb_reset_main_ratio'
+    },
+    
+    # 設定再読み込み
+    ('R', X.Mod1Mask | X.ControlMask | X.ShiftMask): {
+        'method': 'cb_reload_config'
     }
 }
 

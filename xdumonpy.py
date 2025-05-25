@@ -6,15 +6,20 @@ import subprocess
 import re
 import time
 import math
+import importlib.util
+from pathlib import Path
 from Xlib import X, XK, display
 
-# 設定ファイルのインポート
-try:
-    import config as cfg
-except ImportError:
-    print("設定ファイルが見つかりません。デフォルト設定を使用します。", file=sys.stderr)
+def load_config():
+    """設定ファイルを読み込む"""
+    # 設定ファイルの検索順序
+    config_paths = [
+        Path.cwd() / 'config.py',  # カレントディレクトリ
+        Path.home() / '.config' / 'xdumonpy' / 'config.py',  # ユーザー設定
+    ]
+
     # デフォルト設定
-    class cfg:
+    class DefaultConfig:
         # アプリケーション設定
         TERMINAL = 'urxvt'
         EDITOR = 'emacs'
@@ -34,17 +39,40 @@ except ImportError:
         # 仮想スクリーン設定
         MAX_VSCREEN = 4
 
+        # タイル配置設定
+        TILE_RATIOS = {
+            'main_pane_ratio': 0.6,
+            'grid_main_ratio': 0.5,
+            'horizontal_ratios': [0.5],
+            'vertical_ratios': [0.5],
+        }
+
         # キーバインド設定
         KEY_BINDS = {}
 
         # パフォーマンス設定
         DRAG_INTERVAL = 1/60
 
-        # タイル配置関連
-        TILE_RATIOS = {
-            'main_pane_ratio': 0.5,
-            'grid_main_ratio': 0.75
-        }
+    config = DefaultConfig
+
+    # 設定ファイルの読み込み
+    for config_path in config_paths:
+        if config_path.exists():
+            try:
+                spec = importlib.util.spec_from_file_location("config", config_path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                config = module
+                debug(f'設定を読み込みました: {config_path}')
+                break
+            except Exception as e:
+                debug(f'設定の読み込みに失敗しました: {config_path} - {str(e)}')
+
+    return config
+
+def debug(msg):
+    """デバッグメッセージを標準エラー出力に出力"""
+    print(msg, file=sys.stderr, flush=True)
 
 # 定数定義
 LEFT = 1
@@ -66,6 +94,9 @@ class XdumonPy:
         self.display = display.Display()
         self.screen = self.display.screen()
         self.colormap = self.screen.default_colormap
+        
+        # 設定の読み込み
+        self.config = load_config()
         
         # キーバインド関連
         self.keybinds = {}
@@ -107,7 +138,7 @@ class XdumonPy:
                 self.manage_window(child)
         
         # タイル配置関連
-        self.current_main_ratio = cfg.TILE_RATIOS['main_pane_ratio']
+        self.current_main_ratio = self.config.TILE_RATIOS['main_pane_ratio']
         self.current_tile_pattern = TILE_PATTERN_GRID
 
     def get_screen_size(self):
@@ -285,7 +316,7 @@ class XdumonPy:
     def grab_keys(self):
         """キーバインドの設定"""
         debug('function: grab_keys called')
-        for (key, modifier), rule in cfg.KEY_BINDS.items():
+        for (key, modifier), rule in self.config.KEY_BINDS.items():
             keysym = XK.string_to_keysym(key)
             keycode = self.display.keysym_to_keycode(keysym)
             if modifier is None:
@@ -337,7 +368,7 @@ class XdumonPy:
 
         # ドラッグ更新の間隔制御
         now = time.time()
-        if now - self.last_dragged_time < cfg.DRAG_INTERVAL:
+        if now - self.last_dragged_time < self.config.DRAG_INTERVAL:
             return
         self.last_dragged_time = now
 
@@ -356,7 +387,7 @@ class XdumonPy:
             new_width = self.start_geom.width + xdiff
             new_height = self.start_geom.height + ydiff
             
-            if new_width <= cfg.WINDOW_MIN_WIDTH or new_height <= cfg.WINDOW_MIN_HEIGHT:
+            if new_width <= self.config.WINDOW_MIN_WIDTH or new_height <= self.config.WINDOW_MIN_HEIGHT:
                 return
                 
             self.start.child.configure(
@@ -432,7 +463,7 @@ class XdumonPy:
             
         next_window = self.exposed_windows[idx]
         self.focus_window(next_window)
-        next_window.warp_pointer(cfg.INIT_PTR_POS, cfg.INIT_PTR_POS)
+        next_window.warp_pointer(self.config.INIT_PTR_POS, self.config.INIT_PTR_POS)
 
     def focus_window(self, window):
         """指定したウィンドウにフォーカスを設定"""
@@ -452,7 +483,7 @@ class XdumonPy:
             return
             
         self.halve_window(self.framed_window, direction)
-        self.framed_window.warp_pointer(cfg.INIT_PTR_POS, cfg.INIT_PTR_POS)
+        self.framed_window.warp_pointer(self.config.INIT_PTR_POS, self.config.INIT_PTR_POS)
 
     def halve_window(self, window, direction):
         """ウィンドウを指定した方向に半分のサイズにする"""
@@ -463,9 +494,9 @@ class XdumonPy:
         if not geom:
             return
             
-        if direction & (LEFT | RIGHT) != 0 and geom.width <= cfg.WINDOW_MIN_WIDTH:
+        if direction & (LEFT | RIGHT) != 0 and geom.width <= self.config.WINDOW_MIN_WIDTH:
             return
-        if direction & (UPPER | LOWER) != 0 and geom.height <= cfg.WINDOW_MIN_HEIGHT:
+        if direction & (UPPER | LOWER) != 0 and geom.height <= self.config.WINDOW_MIN_HEIGHT:
             return
             
         x, y = geom.x, geom.y
@@ -495,7 +526,7 @@ class XdumonPy:
             return
             
         self.move_window_to_next_monitor(self.framed_window)
-        self.framed_window.warp_pointer(cfg.INIT_PTR_POS, cfg.INIT_PTR_POS)
+        self.framed_window.warp_pointer(self.config.INIT_PTR_POS, self.config.INIT_PTR_POS)
 
     def loop(self):
         """メインイベントループ"""
@@ -533,7 +564,7 @@ class XdumonPy:
     def select_vscreen(self, num):
         """指定した仮想スクリーンに切り替え"""
         debug('function: select_vscreen called')
-        if num < 0 or num >= cfg.MAX_VSCREEN:
+        if num < 0 or num >= self.config.MAX_VSCREEN:
             return
 
         self.current_vscreen = num
@@ -555,9 +586,9 @@ class XdumonPy:
 
         current_idx = self.window_vscreen[window]
         if direction == FORWARD:
-            next_idx = (current_idx + 1) % cfg.MAX_VSCREEN
+            next_idx = (current_idx + 1) % self.config.MAX_VSCREEN
         else:
-            next_idx = (current_idx - 1) % cfg.MAX_VSCREEN
+            next_idx = (current_idx - 1) % self.config.MAX_VSCREEN
 
         self.window_vscreen[window] = next_idx
         return next_idx
@@ -565,7 +596,7 @@ class XdumonPy:
     def create_frame_windows(self):
         """フレームウィンドウの作成"""
         debug('function: create_frame_windows called')
-        self.frame_pixel = self.colormap.alloc_named_color(cfg.FRAME_COLOR).pixel
+        self.frame_pixel = self.colormap.alloc_named_color(self.config.FRAME_COLOR).pixel
         
         for side in ['left', 'right', 'upper', 'lower']:
             window = self.screen.root.create_window(
@@ -585,9 +616,9 @@ class XdumonPy:
 
         # フレームの色を設定
         if self.framed_window in self.special_window:
-            new_frame_pixel = self.colormap.alloc_named_color(cfg.FRAME_SPECIAL_COLOR).pixel
+            new_frame_pixel = self.colormap.alloc_named_color(self.config.FRAME_SPECIAL_COLOR).pixel
         else:
-            new_frame_pixel = self.colormap.alloc_named_color(cfg.FRAME_COLOR).pixel
+            new_frame_pixel = self.colormap.alloc_named_color(self.config.FRAME_COLOR).pixel
 
         # 各フレームの色を更新
         for side in ['left', 'right', 'upper', 'lower']:
@@ -604,23 +635,23 @@ class XdumonPy:
             if side == 'left':
                 x = geom.x
                 y = geom.y
-                width = cfg.FRAME_THICKNESS
+                width = self.config.FRAME_THICKNESS
                 height = geom.height
             elif side == 'right':
-                x = geom.x + geom.width - cfg.FRAME_THICKNESS
+                x = geom.x + geom.width - self.config.FRAME_THICKNESS
                 y = geom.y
-                width = cfg.FRAME_THICKNESS
+                width = self.config.FRAME_THICKNESS
                 height = geom.height
             elif side == 'upper':
                 x = geom.x
                 y = geom.y
                 width = geom.width
-                height = cfg.FRAME_THICKNESS
+                height = self.config.FRAME_THICKNESS
             elif side == 'lower':
                 x = geom.x
-                y = geom.y + geom.height - cfg.FRAME_THICKNESS
+                y = geom.y + geom.height - self.config.FRAME_THICKNESS
                 width = geom.width
-                height = cfg.FRAME_THICKNESS
+                height = self.config.FRAME_THICKNESS
 
             self.frame_windows[side].configure(
                 x=x,
@@ -676,7 +707,7 @@ class XdumonPy:
         # エディタウィンドウを優先的に配置
         eidx = None
         for i in range(len(target_windows)):
-            if cfg.PRIORITY_WINDOW in self.get_window_class(target_windows[i]).lower():
+            if self.config.PRIORITY_WINDOW in self.get_window_class(target_windows[i]).lower():
                 eidx = i
 
         if pattern == TILE_PATTERN_GRID:
@@ -687,7 +718,7 @@ class XdumonPy:
             self.tile_windows_vertical(target_windows, monitor, eidx)
 
         # ポインタを移動
-        window.warp_pointer(cfg.INIT_PTR_POS, cfg.INIT_PTR_POS)
+        window.warp_pointer(self.config.INIT_PTR_POS, self.config.INIT_PTR_POS)
 
     def tile_windows_grid(self, target_windows, monitor, eidx):
         """グリッドパターンでウィンドウを配置"""
@@ -704,7 +735,7 @@ class XdumonPy:
                 target_windows[ncols*(nrows-1)-1], target_windows[eidx]
 
         # メインウィンドウ（左下）のサイズを調整
-        main_ratio = cfg.TILE_RATIOS['grid_main_ratio']
+        main_ratio = self.config.TILE_RATIOS['grid_main_ratio']
         main_width = int(monitor['width'] * main_ratio / ncols)
         main_height = int(monitor['height'] * main_ratio / nrows)
 
@@ -836,9 +867,52 @@ class XdumonPy:
     def cb_reset_main_ratio(self, event):
         """メインペインの比率をリセット"""
         debug('callback: cb_reset_main_ratio called')
-        self.current_main_ratio = cfg.TILE_RATIOS['main_pane_ratio']
+        self.current_main_ratio = self.config.TILE_RATIOS['main_pane_ratio']
         if self.framed_window:
             self.tile_windows(self.framed_window, self.current_tile_pattern)
+
+    def reload_config(self):
+        """設定を再読み込み"""
+        debug('function: reload_config called')
+        old_config = self.config
+        self.config = load_config()
+
+        # キーバインドの再設定
+        self.ungrab_keys()
+        self.grab_keys()
+
+        # フレームの再設定
+        if (self.config.FRAME_COLOR != old_config.FRAME_COLOR or
+            self.config.FRAME_SPECIAL_COLOR != old_config.FRAME_SPECIAL_COLOR or
+            self.config.FRAME_THICKNESS != old_config.FRAME_THICKNESS):
+            self.recreate_frame_windows()
+
+        # タイル配置の更新
+        if self.framed_window:
+            self.tile_windows(self.framed_window, self.current_tile_pattern)
+
+    def ungrab_keys(self):
+        """キーバインドを解除"""
+        debug('function: ungrab_keys called')
+        for keycode, modifier in self.keybinds.keys():
+            self.screen.root.ungrab_key(keycode, modifier)
+        self.keybinds.clear()
+
+    def recreate_frame_windows(self):
+        """フレームウィンドウを再作成"""
+        debug('function: recreate_frame_windows called')
+        # 既存のフレームを削除
+        for window in self.frame_windows.values():
+            window.destroy()
+        self.frame_windows.clear()
+        
+        # フレームを再作成
+        self.create_frame_windows()
+
+    def cb_reload_config(self, event):
+        """設定再読み込みのコールバック"""
+        debug('callback: cb_reload_config called')
+        self.reload_config()
 
 def main():
     wm = XdumonPy()
