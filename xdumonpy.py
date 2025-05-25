@@ -13,6 +13,11 @@ WINDOW_MIN_WIDTH = 1920/8  # ウィンドウの最小幅
 WINDOW_MIN_HEIGHT = 1280/8  # ウィンドウの最小高さ
 DRAG_INTERVAL = 1/60  # ドラッグ更新の間隔（秒）
 
+# フレームの設定
+FRAME_COLOR = 'SteelBlue3'  # 通常のフレーム色
+FRAME_SPECIAL_COLOR = 'orange'  # 特別なウィンドウのフレーム色
+FRAME_THICKNESS = 2  # フレームの太さ
+
 # アプリケーション設定
 TERMINAL = 'urxvt'  # 端末エミュレータ
 EDITOR = 'emacs'    # エディタ
@@ -110,6 +115,10 @@ class XdumonPy:
         self.exposed_windows = []  # 表示中のウィンドウを保持
         self.framed_window = None  # 現在フォーカスのあるウィンドウ
         
+        # フレーム関連
+        self.frame_windows = {}  # フレームウィンドウを保持
+        self.special_window = []  # 特別扱いするウィンドウを保持
+        
         # 仮想スクリーン関連
         self.window_vscreen = {}  # ウィンドウと仮想スクリーンの対応を保持
         self.current_vscreen = 0  # 現在の仮想スクリーン番号
@@ -122,6 +131,9 @@ class XdumonPy:
         # モニター情報の初期化
         self.monitor_geometries = self.get_available_monitor_geometries()
         self.maxsize = self.get_screen_size()
+        
+        # フレームウィンドウの作成
+        self.create_frame_windows()
         
         # イベントの捕捉を開始
         self.catch_events()
@@ -373,6 +385,7 @@ class XdumonPy:
                 x=self.start_geom.x + xdiff,
                 y=self.start_geom.y + ydiff
             )
+            self.draw_frame_windows()  # フレームも一緒に移動
         elif self.start.detail == 3:  # 右クリックドラッグ: リサイズ
             # 最小サイズのチェック
             new_width = self.start_geom.width + xdiff
@@ -385,6 +398,7 @@ class XdumonPy:
                 width=new_width,
                 height=new_height
             )
+            self.draw_frame_windows()  # フレームもリサイズ
 
     def manage_window(self, window):
         """新しいウィンドウを管理対象に追加"""
@@ -464,6 +478,7 @@ class XdumonPy:
         window.set_input_focus(X.RevertToParent, 0)
         window.configure(stack_mode=X.Above)
         self.framed_window = window
+        self.draw_frame_windows()
 
     def cb_halve_window(self, event, direction):
         """ウィンドウを半分のサイズに変更"""
@@ -546,6 +561,9 @@ class XdumonPy:
                 self.exposed_windows.remove(event.window)
             if event.window in self.window_vscreen:
                 self.window_vscreen.pop(event.window)
+            if event.window == self.framed_window:
+                self.framed_window = None
+                self.unmap_frame_windows()
 
     def select_vscreen(self, num):
         """指定した仮想スクリーンに切り替え"""
@@ -578,6 +596,85 @@ class XdumonPy:
 
         self.window_vscreen[window] = next_idx
         return next_idx
+
+    def create_frame_windows(self):
+        """フレームウィンドウの作成"""
+        debug('function: create_frame_windows called')
+        self.frame_pixel = self.colormap.alloc_named_color(FRAME_COLOR).pixel
+        
+        for side in ['left', 'right', 'upper', 'lower']:
+            window = self.screen.root.create_window(
+                0, 0, 16, 16, 0,
+                self.screen.root_depth,
+                X.InputOutput,
+                background_pixel=self.frame_pixel,
+                override_redirect=True
+            )
+            window.map()
+            self.frame_windows[side] = window
+
+    def draw_frame_windows(self):
+        """フレームウィンドウの描画"""
+        if self.framed_window is None:
+            return
+
+        # フレームの色を設定
+        if self.framed_window in self.special_window:
+            new_frame_pixel = self.colormap.alloc_named_color(FRAME_SPECIAL_COLOR).pixel
+        else:
+            new_frame_pixel = self.colormap.alloc_named_color(FRAME_COLOR).pixel
+
+        # 各フレームの色を更新
+        for side in ['left', 'right', 'upper', 'lower']:
+            self.frame_windows[side].change_attributes(background_pixel=new_frame_pixel)
+            self.frame_windows[side].clear_area(0, 0, 0, 0, True)
+
+        # フレームの位置とサイズを設定
+        geom = self.get_window_geometry(self.framed_window)
+        if geom is None:
+            return
+
+        for side in ['left', 'right', 'upper', 'lower']:
+            x, y, width, height = 0, 0, 0, 0
+            if side == 'left':
+                x = geom.x
+                y = geom.y
+                width = FRAME_THICKNESS
+                height = geom.height
+            elif side == 'right':
+                x = geom.x + geom.width - FRAME_THICKNESS
+                y = geom.y
+                width = FRAME_THICKNESS
+                height = geom.height
+            elif side == 'upper':
+                x = geom.x
+                y = geom.y
+                width = geom.width
+                height = FRAME_THICKNESS
+            elif side == 'lower':
+                x = geom.x
+                y = geom.y + geom.height - FRAME_THICKNESS
+                width = geom.width
+                height = FRAME_THICKNESS
+
+            self.frame_windows[side].configure(
+                x=x,
+                y=y,
+                width=width,
+                height=height,
+                stack_mode=X.Above
+            )
+            self.frame_windows[side].map()
+
+    def map_frame_windows(self):
+        """フレームウィンドウを表示"""
+        for side in ['left', 'right', 'upper', 'lower']:
+            self.frame_windows[side].map()
+
+    def unmap_frame_windows(self):
+        """フレームウィンドウを非表示"""
+        for side in ['left', 'right', 'upper', 'lower']:
+            self.frame_windows[side].unmap()
 
 def main():
     wm = XdumonPy()
