@@ -7,7 +7,7 @@
 # エディタのバックアップファイルなども一般的に無視
 *.swp
 *.swo
-.DS_Store
+.DS_Store 
 
 # Pythonの一般的な無視ファイル
 __pycache__/

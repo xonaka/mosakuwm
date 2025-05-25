@@ -1076,165 +1076,50 @@ class Mosakuwm:
         self.exposed_windows.insert(0, window)
         window.configure(stack_mode=X.Above)
 
-    def tile_windows(self, window, pattern=TILE_PATTERN_GRID):
-        """ウィンドウをタイル状に配置"""
+    def tile_windows(self, window):
         debug('function: tile_windows called')
-        self.current_tile_pattern = pattern
-        # 現在のモニターを取得
         monitor = self.managed_windows.get(window, None)
         if monitor is None:
             return
-        # 現在のモニターに表示されているウィンドウを収集（フローティング以外）
         target_windows = []
         for win in self.exposed_windows:
-            if (monitor == self.managed_windows.get(win, None) and
-                win not in self.floating_windows):
+            if monitor == self.managed_windows.get(win, None):
                 target_windows.append(win)
-        # ウィンドウをIDでソート（安定した配置のため）
         def sort_key(window):
             return window.id
         target_windows.sort(key=sort_key)
-        # エディタウィンドウを優先的に配置
+        nrows, ncols = self.get_tile_layout(len(target_windows))
+        offcuts_num = nrows*ncols - len(target_windows)
         eidx = None
         for i in range(len(target_windows)):
             if self.config.PRIORITY_WINDOW in self.get_window_class(target_windows[i]).lower():
                 eidx = i
-        if pattern == TILE_PATTERN_GRID:
-            self.tile_windows_grid(target_windows, monitor, eidx)
-        elif pattern == TILE_PATTERN_HORIZONTAL:
-            self.tile_windows_horizontal(target_windows, monitor, eidx)
-        elif pattern == TILE_PATTERN_VERTICAL:
-            self.tile_windows_vertical(target_windows, monitor, eidx)
-        # ポインタを移動
-        window.warp_pointer(self.config.INIT_PTR_POS, self.config.INIT_PTR_POS)
-        # スタック最上位に移動
-        self.set_window_to_stack_top(window)
-
-    def tile_windows_grid(self, target_windows, monitor, eidx):
-        """グリッドパターンでウィンドウを配置"""
-        if not target_windows:
-            return
-
-        # レイアウトの計算
-        nrows, ncols = self.get_tile_layout(len(target_windows))
-        offcuts_num = nrows*ncols - len(target_windows)
-
-        # エディタウィンドウを左下に配置
         if eidx is not None:
             target_windows[eidx], target_windows[ncols*(nrows-1)-1] = \
                 target_windows[ncols*(nrows-1)-1], target_windows[eidx]
-
-        # メインウィンドウ（左下）のサイズを調整
-        main_ratio = self.config.TILE_RATIOS['grid_main_ratio']
-        main_width = int(monitor['width'] * main_ratio / ncols)
-        main_height = int(monitor['height'] * main_ratio / nrows)
-
-        # ウィンドウの配置
         for row in reversed(range(nrows)):
             for col in reversed(range(ncols)):
                 if not target_windows:
                     break
                 win = target_windows.pop(0)
-                
-                # 位置とサイズの計算
                 x = monitor['x'] + monitor['width']*col//ncols
                 width = monitor['width']//ncols
-                
-                # 下段の空きスペースを利用
                 if row == 1 and col < offcuts_num:
                     height = monitor['height']*2//nrows
-                    y = monitor['y']
+                    y = 0 + monitor['y']
                 else:
                     height = monitor['height']//nrows
                     y = monitor['y'] + monitor['height']*row//nrows
-                
-                # メインウィンドウ（左下）のサイズを調整
-                if row == 0 and col == 0:
-                    width = main_width
-                    height = main_height
-                
-                # ウィンドウの設定
-                win.configure(
-                    x=x,
-                    y=y,
-                    width=width,
-                    height=height
-                )
+                win.configure(x=x, y=y, width=width, height=height)
+        window.warp_pointer(self.config.INIT_PTR_POS, self.config.INIT_PTR_POS)
+        self.set_window_to_stack_top(window)
 
-    def tile_windows_horizontal(self, target_windows, monitor, eidx):
-        """水平分割パターンでウィンドウを配置"""
-        if not target_windows:
-            return
-
-        # エディタウィンドウを最上部に配置
-        if eidx is not None:
-            target_windows[eidx], target_windows[0] = \
-                target_windows[0], target_windows[eidx]
-
-        num_windows = len(target_windows)
-        main_height = int(monitor['height'] * self.current_main_ratio)
-        sub_height = (monitor['height'] - main_height) // (num_windows - 1) if num_windows > 1 else 0
-
-        for i, win in enumerate(target_windows):
-            # 位置とサイズの計算
-            x = monitor['x']
-            width = monitor['width']
-            
-            if i == 0:  # メインペイン
-                y = monitor['y']
-                height = main_height
-            else:  # サブペイン
-                y = monitor['y'] + main_height + (i-1) * sub_height
-                height = sub_height
-
-            # ウィンドウの設定
-            win.configure(
-                x=x,
-                y=y,
-                width=width,
-                height=height
-            )
-
-    def tile_windows_vertical(self, target_windows, monitor, eidx):
-        """垂直分割パターンでウィンドウを配置"""
-        if not target_windows:
-            return
-
-        # エディタウィンドウを最左部に配置
-        if eidx is not None:
-            target_windows[eidx], target_windows[0] = \
-                target_windows[0], target_windows[eidx]
-
-        num_windows = len(target_windows)
-        main_width = int(monitor['width'] * self.current_main_ratio)
-        sub_width = (monitor['width'] - main_width) // (num_windows - 1) if num_windows > 1 else 0
-
-        for i, win in enumerate(target_windows):
-            # 位置とサイズの計算
-            y = monitor['y']
-            height = monitor['height']
-            
-            if i == 0:  # メインペイン
-                x = monitor['x']
-                width = main_width
-            else:  # サブペイン
-                x = monitor['x'] + main_width + (i-1) * sub_width
-                width = sub_width
-
-            # ウィンドウの設定
-            win.configure(
-                x=x,
-                y=y,
-                width=width,
-                height=height
-            )
-
-    def cb_tile_windows(self, event, pattern=TILE_PATTERN_GRID):
+    def cb_tile_windows(self, event):
         """タイル配置のコールバック"""
         debug('callback: cb_tile_windows called')
         if not self.framed_window:
             return
-        self.tile_windows(self.framed_window, pattern)
+        self.tile_windows(self.framed_window)
         self.focus_window(self.framed_window)
 
     def get_window_class(self, window):
@@ -1252,14 +1137,14 @@ class Mosakuwm:
         if 0.1 <= new_ratio <= 0.9:  # 比率の範囲を制限
             self.current_main_ratio = new_ratio
             if self.framed_window:
-                self.tile_windows(self.framed_window, self.current_tile_pattern)
+                self.tile_windows(self.framed_window)
 
     def cb_reset_main_ratio(self, event):
         """メインペインの比率をリセット"""
         debug('callback: cb_reset_main_ratio called')
         self.current_main_ratio = self.config.TILE_RATIOS['main_pane_ratio']
         if self.framed_window:
-            self.tile_windows(self.framed_window, self.current_tile_pattern)
+            self.tile_windows(self.framed_window)
 
     def reload_config(self):
         """設定を再読み込み"""
@@ -1279,7 +1164,7 @@ class Mosakuwm:
 
         # タイル配置の更新
         if self.framed_window:
-            self.tile_windows(self.framed_window, self.current_tile_pattern)
+            self.tile_windows(self.framed_window)
 
     def ungrab_keys(self):
         """キーバインドを解除"""
