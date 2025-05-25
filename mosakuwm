@@ -926,8 +926,13 @@ class Mosakuwm:
                 self.handle_motion_notify(event)
             elif event.type == X.KeyPress:
                 self.handle_key_press(event)
-            elif event.type == self.display.extension_event.RRScreenChangeNotify:
-                self.handle_randr_notify(event)
+            # XRandRのイベント処理を修正
+            try:
+                if hasattr(self.display.extension_event, 'RRScreenChangeNotify') and \
+                   event.type == self.display.extension_event.RRScreenChangeNotify:
+                    self.handle_randr_notify(event)
+            except AttributeError:
+                pass  # XRandR拡張が利用できない場合は無視
 
     def handle_map_request(self, event):
         """新しいウィンドウが作成された時のハンドラ"""
