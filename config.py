@@ -146,6 +146,16 @@ KEY_BINDS = {
     },
     ('s', X.Mod1Mask | X.ShiftMask): {
         'method': 'cb_save_layout_preset'
+    },
+    
+    # プリセット管理用の新しいキーバインド
+    ('e', X.Mod1Mask | X.ShiftMask): {
+        'method': 'cb_edit_layout_preset',
+        'arg': ('coding', 'coding_custom', '新しいコーディングレイアウト')  # 例: codingプリセットを編集
+    },
+    ('d', X.Mod1Mask | X.ShiftMask): {
+        'method': 'cb_delete_layout_preset',
+        'arg': None  # 現在のレイアウトを削除
     }
 }
 

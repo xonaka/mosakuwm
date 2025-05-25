@@ -1266,6 +1266,156 @@ LAYOUT_PRESETS = {{
         debug('callback: cb_save_layout_preset called')
         self.save_layout_preset()
 
+    def edit_layout_preset(self, preset_name=None, new_name=None, new_description=None):
+        """レイアウトプリセットを編集"""
+        debug('function: edit_layout_preset called')
+        
+        if not preset_name and not self.current_layout:
+            debug('No preset selected')
+            return
+        
+        preset_name = preset_name or self.current_layout
+        if preset_name not in self.config.LAYOUT_PRESETS:
+            debug(f'Preset {preset_name} not found')
+            return
+        
+        # 設定ファイルを読み込み
+        config_dir = self.ensure_config_dir()
+        config_file = config_dir / 'config.py'
+        
+        if not config_file.exists():
+            debug('Config file not found')
+            return
+        
+        with open(config_file, 'r') as f:
+            config_content = f.read()
+        
+        # プリセットの開始位置を検索
+        preset_start = config_content.find(f"'{preset_name}': {{")
+        if preset_start == -1:
+            debug(f'Preset {preset_name} not found in config file')
+            return
+        
+        # プリセットの終了位置を検索（次のプリセットの開始位置まで）
+        preset_end = config_content.find("',", preset_start)
+        if preset_end == -1:
+            preset_end = config_content.find('}', preset_start)
+            preset_end = config_content.find('}', preset_end + 1) + 1
+        else:
+            preset_end = config_content.find('}', preset_start) + 1
+        
+        # 現在のプリセットを取得
+        current_preset = self.config.LAYOUT_PRESETS[preset_name].copy()
+        
+        # プリセットを更新
+        if new_name:
+            current_preset['name'] = new_name
+        if new_description:
+            current_preset['description'] = new_description
+        
+        # 設定ファイルを更新
+        if new_name and new_name != preset_name:
+            # 新しい名前でプリセットを追加
+            new_preset_str = f"    '{new_name}': {current_preset},\n"
+            insert_pos = config_content.find('LAYOUT_PRESETS = {') + len('LAYOUT_PRESETS = {')
+            config_content = (
+                config_content[:insert_pos] + '\n' + new_preset_str +
+                config_content[insert_pos:]
+            )
+            
+            # 古いプリセットを削除
+            config_content = (
+                config_content[:preset_start] +
+                config_content[preset_end + 1:]
+            )
+        else:
+            # プリセットを更新
+            new_preset_str = f"    '{preset_name}': {current_preset}"
+            config_content = (
+                config_content[:preset_start] +
+                new_preset_str +
+                config_content[preset_end:]
+            )
+        
+        # 設定ファイルを保存
+        with open(config_file, 'w') as f:
+            f.write(config_content)
+        
+        debug(f'Layout preset {preset_name} updated')
+        
+        # 設定を再読み込み
+        self.reload_config()
+
+    def delete_layout_preset(self, preset_name=None):
+        """レイアウトプリセットを削除"""
+        debug('function: delete_layout_preset called')
+        
+        if not preset_name and not self.current_layout:
+            debug('No preset selected')
+            return
+        
+        preset_name = preset_name or self.current_layout
+        if preset_name not in self.config.LAYOUT_PRESETS:
+            debug(f'Preset {preset_name} not found')
+            return
+        
+        # 設定ファイルを読み込み
+        config_dir = self.ensure_config_dir()
+        config_file = config_dir / 'config.py'
+        
+        if not config_file.exists():
+            debug('Config file not found')
+            return
+        
+        with open(config_file, 'r') as f:
+            config_content = f.read()
+        
+        # プリセットの開始位置を検索
+        preset_start = config_content.find(f"'{preset_name}': {{")
+        if preset_start == -1:
+            debug(f'Preset {preset_name} not found in config file')
+            return
+        
+        # プリセットの終了位置を検索
+        preset_end = config_content.find("',", preset_start)
+        if preset_end == -1:
+            preset_end = config_content.find('}', preset_start)
+            preset_end = config_content.find('}', preset_end + 1) + 1
+        else:
+            preset_end = config_content.find('}', preset_start) + 1
+        
+        # プリセットを削除
+        config_content = (
+            config_content[:preset_start] +
+            config_content[preset_end + 1:]
+        )
+        
+        # 設定ファイルを保存
+        with open(config_file, 'w') as f:
+            f.write(config_content)
+        
+        debug(f'Layout preset {preset_name} deleted')
+        
+        # 現在のレイアウトをクリア（削除されたプリセットの場合）
+        if preset_name == self.current_layout:
+            self.current_layout = None
+        
+        # 設定を再読み込み
+        self.reload_config()
+
+    def cb_edit_layout_preset(self, event, args=None):
+        """レイアウトプリセット編集のコールバック"""
+        debug('callback: cb_edit_layout_preset called')
+        if not args:
+            return
+        preset_name, new_name, new_description = args
+        self.edit_layout_preset(preset_name, new_name, new_description)
+
+    def cb_delete_layout_preset(self, event, preset_name=None):
+        """レイアウトプリセット削除のコールバック"""
+        debug('callback: cb_delete_layout_preset called')
+        self.delete_layout_preset(preset_name)
+
 def main():
     wm = XdumonPy()
     try:
