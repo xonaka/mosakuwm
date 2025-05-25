@@ -21,6 +21,14 @@ FRAME_THICKNESS = 2              # フレームの太さ
 # 仮想スクリーン設定
 MAX_VSCREEN = 4  # 仮想スクリーンの最大数
 
+# タイル配置設定
+TILE_RATIOS = {
+    'main_pane_ratio': 0.6,      # メインペインの画面比率（水平・垂直分割時）
+    'grid_main_ratio': 0.5,      # グリッド配置時のメインウィンドウ比率
+    'horizontal_ratios': [0.5],  # 水平分割時の比率プリセット
+    'vertical_ratios': [0.5],    # 垂直分割時の比率プリセット
+}
+
 # キーバインド設定
 KEY_BINDS = {
     # ウィンドウ操作
@@ -103,6 +111,19 @@ KEY_BINDS = {
     ('v', X.Mod1Mask | X.ShiftMask): {
         'method': 'cb_tile_windows',
         'arg': 2  # TILE_PATTERN_VERTICAL
+    },
+    
+    # タイル比率調整
+    ('plus', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_adjust_main_ratio',
+        'arg': 0.1  # 増加
+    },
+    ('minus', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_adjust_main_ratio',
+        'arg': -0.1  # 減少
+    },
+    ('r', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_reset_main_ratio'
     }
 }
 

@@ -40,6 +40,12 @@ except ImportError:
         # パフォーマンス設定
         DRAG_INTERVAL = 1/60
 
+        # タイル配置関連
+        TILE_RATIOS = {
+            'main_pane_ratio': 0.5,
+            'grid_main_ratio': 0.75
+        }
+
 # 定数定義
 LEFT = 1
 RIGHT = 2
@@ -99,6 +105,10 @@ class XdumonPy:
         for child in self.screen.root.query_tree().children:
             if child.get_attributes().map_state:
                 self.manage_window(child)
+        
+        # タイル配置関連
+        self.current_main_ratio = cfg.TILE_RATIOS['main_pane_ratio']
+        self.current_tile_pattern = TILE_PATTERN_GRID
 
     def get_screen_size(self):
         """スクリーン全体のサイズを取得"""
@@ -645,6 +655,8 @@ class XdumonPy:
     def tile_windows(self, window, pattern=TILE_PATTERN_GRID):
         """ウィンドウをタイル状に配置"""
         debug('function: tile_windows called')
+        self.current_tile_pattern = pattern  # 現在のパターンを保存
+        
         # 現在のモニターを取得
         monitor = self.managed_windows.get(window, None)
         if monitor is None:
@@ -691,6 +703,11 @@ class XdumonPy:
             target_windows[eidx], target_windows[ncols*(nrows-1)-1] = \
                 target_windows[ncols*(nrows-1)-1], target_windows[eidx]
 
+        # メインウィンドウ（左下）のサイズを調整
+        main_ratio = cfg.TILE_RATIOS['grid_main_ratio']
+        main_width = int(monitor['width'] * main_ratio / ncols)
+        main_height = int(monitor['height'] * main_ratio / nrows)
+
         # ウィンドウの配置
         for row in reversed(range(nrows)):
             for col in reversed(range(ncols)):
@@ -709,6 +726,11 @@ class XdumonPy:
                 else:
                     height = monitor['height']//nrows
                     y = monitor['y'] + monitor['height']*row//nrows
+                
+                # メインウィンドウ（左下）のサイズを調整
+                if row == 0 and col == 0:
+                    width = main_width
+                    height = main_height
                 
                 # ウィンドウの設定
                 win.configure(
@@ -729,12 +751,20 @@ class XdumonPy:
                 target_windows[0], target_windows[eidx]
 
         num_windows = len(target_windows)
+        main_height = int(monitor['height'] * self.current_main_ratio)
+        sub_height = (monitor['height'] - main_height) // (num_windows - 1) if num_windows > 1 else 0
+
         for i, win in enumerate(target_windows):
             # 位置とサイズの計算
             x = monitor['x']
-            y = monitor['y'] + (monitor['height'] * i) // num_windows
             width = monitor['width']
-            height = monitor['height'] // num_windows
+            
+            if i == 0:  # メインペイン
+                y = monitor['y']
+                height = main_height
+            else:  # サブペイン
+                y = monitor['y'] + main_height + (i-1) * sub_height
+                height = sub_height
 
             # ウィンドウの設定
             win.configure(
@@ -755,12 +785,20 @@ class XdumonPy:
                 target_windows[0], target_windows[eidx]
 
         num_windows = len(target_windows)
+        main_width = int(monitor['width'] * self.current_main_ratio)
+        sub_width = (monitor['width'] - main_width) // (num_windows - 1) if num_windows > 1 else 0
+
         for i, win in enumerate(target_windows):
             # 位置とサイズの計算
-            x = monitor['x'] + (monitor['width'] * i) // num_windows
             y = monitor['y']
-            width = monitor['width'] // num_windows
             height = monitor['height']
+            
+            if i == 0:  # メインペイン
+                x = monitor['x']
+                width = main_width
+            else:  # サブペイン
+                x = monitor['x'] + main_width + (i-1) * sub_width
+                width = sub_width
 
             # ウィンドウの設定
             win.configure(
@@ -785,6 +823,22 @@ class XdumonPy:
             return cls if cls is not None else ''
         except:
             return ''
+
+    def cb_adjust_main_ratio(self, event, delta):
+        """メインペインの比率を調整"""
+        debug('callback: cb_adjust_main_ratio called')
+        new_ratio = self.current_main_ratio + delta
+        if 0.1 <= new_ratio <= 0.9:  # 比率の範囲を制限
+            self.current_main_ratio = new_ratio
+            if self.framed_window:
+                self.tile_windows(self.framed_window, self.current_tile_pattern)
+
+    def cb_reset_main_ratio(self, event):
+        """メインペインの比率をリセット"""
+        debug('callback: cb_reset_main_ratio called')
+        self.current_main_ratio = cfg.TILE_RATIOS['main_pane_ratio']
+        if self.framed_window:
+            self.tile_windows(self.framed_window, self.current_tile_pattern)
 
 def main():
     wm = XdumonPy()
