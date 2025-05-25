@@ -133,4 +133,47 @@ KEY_BINDS = {
 }
 
 # パフォーマンス設定
-DRAG_INTERVAL = 1/60  # ドラッグ更新の間隔（秒） 
+DRAG_INTERVAL = 1/60  # ドラッグ更新の間隔（秒）
+
+# ウィンドウルール設定
+WINDOW_RULES = {
+    # エディタは常に左下に配置し、特別な色で表示
+    'emacs': {
+        'special_color': True,  # 特別な色で表示
+        'position': 'bottom_left',  # 配置位置
+        'vscreen': 0,  # 仮想スクリーン番号
+        'monitor': 0,  # モニター番号（0: プライマリ）
+    },
+    
+    # ブラウザは2番目の仮想スクリーンで起動
+    'google-chrome': {
+        'vscreen': 1,
+        'position': 'center',
+    },
+    
+    # ターミナルは3番目の仮想スクリーンで起動
+    'urxvt': {
+        'vscreen': 2,
+        'position': 'center',
+    },
+    
+    # 画像ビューアは常にフローティング
+    'feh': {
+        'floating': True,
+    },
+    
+    # メディアプレーヤーは常に右下
+    'mpv': {
+        'position': 'bottom_right',
+        'floating': True,
+    }
+}
+
+# 配置位置の定義（ピクセル単位またはパーセンテージ）
+WINDOW_POSITIONS = {
+    'center': {'x': '50%', 'y': '50%'},
+    'top_left': {'x': 0, 'y': 0},
+    'top_right': {'x': '100%', 'y': 0},
+    'bottom_left': {'x': 0, 'y': '100%'},
+    'bottom_right': {'x': '100%', 'y': '100%'},
+} 

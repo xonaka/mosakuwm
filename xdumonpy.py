@@ -53,6 +53,10 @@ def load_config():
         # パフォーマンス設定
         DRAG_INTERVAL = 1/60
 
+        # ウィンドウルール設定
+        WINDOW_RULES = {}
+        WINDOW_POSITIONS = {}
+
     config = DefaultConfig
 
     # 設定ファイルの読み込み
@@ -140,6 +144,9 @@ class XdumonPy:
         # タイル配置関連
         self.current_main_ratio = self.config.TILE_RATIOS['main_pane_ratio']
         self.current_tile_pattern = TILE_PATTERN_GRID
+        
+        # ウィンドウルール関連
+        self.floating_windows = set()  # フローティングウィンドウを保持
 
     def get_screen_size(self):
         """スクリーン全体のサイズを取得"""
@@ -408,8 +415,11 @@ class XdumonPy:
             
         self.managed_windows[window] = self.get_monitor_geometry_with_window(window)
         self.exposed_windows.append(window)
-        # 新規ウィンドウを現在の仮想スクリーンに割り当て
         self.window_vscreen[window] = self.current_vscreen
+        
+        # ウィンドウルールの適用
+        self.apply_window_rules(window)
+        
         window.map()
 
     def get_window_attributes(self, window):
@@ -686,17 +696,18 @@ class XdumonPy:
     def tile_windows(self, window, pattern=TILE_PATTERN_GRID):
         """ウィンドウをタイル状に配置"""
         debug('function: tile_windows called')
-        self.current_tile_pattern = pattern  # 現在のパターンを保存
+        self.current_tile_pattern = pattern
         
         # 現在のモニターを取得
         monitor = self.managed_windows.get(window, None)
         if monitor is None:
             return
 
-        # 現在のモニターに表示されているウィンドウを収集
+        # 現在のモニターに表示されているウィンドウを収集（フローティング以外）
         target_windows = []
         for win in self.exposed_windows:
-            if monitor == self.managed_windows.get(win, None):
+            if (monitor == self.managed_windows.get(win, None) and
+                win not in self.floating_windows):
                 target_windows.append(win)
 
         # ウィンドウをIDでソート（安定した配置のため）
@@ -913,6 +924,74 @@ class XdumonPy:
         """設定再読み込みのコールバック"""
         debug('callback: cb_reload_config called')
         self.reload_config()
+
+    def apply_window_rules(self, window):
+        """ウィンドウルールを適用"""
+        debug('function: apply_window_rules called')
+        window_class = self.get_window_class(window)
+        if not window_class:
+            return
+
+        # ウィンドウルールの取得
+        rule = self.config.WINDOW_RULES.get(window_class.lower(), {})
+        
+        # 特別な色の設定
+        if rule.get('special_color', False):
+            self.special_window.append(window)
+        
+        # フローティングの設定
+        if rule.get('floating', False):
+            self.floating_windows.add(window)
+        
+        # 仮想スクリーンの設定
+        if 'vscreen' in rule:
+            self.window_vscreen[window] = rule['vscreen']
+            if rule['vscreen'] != self.current_vscreen:
+                window.unmap()
+            else:
+                window.map()
+        
+        # モニターの設定
+        if 'monitor' in rule:
+            monitor_idx = rule['monitor']
+            monitors = list(self.monitor_geometries.values())
+            if 0 <= monitor_idx < len(monitors):
+                self.managed_windows[window] = monitors[monitor_idx]
+        
+        # 位置の設定
+        if 'position' in rule:
+            self.apply_window_position(window, rule['position'])
+
+    def apply_window_position(self, window, position_name):
+        """ウィンドウの位置を設定"""
+        debug('function: apply_window_position called')
+        monitor = self.managed_windows.get(window, None)
+        if not monitor or position_name not in self.config.WINDOW_POSITIONS:
+            return
+
+        geom = self.get_window_geometry(window)
+        if not geom:
+            return
+
+        position = self.config.WINDOW_POSITIONS[position_name]
+        x = position['x']
+        y = position['y']
+
+        # パーセンテージ指定の場合は計算
+        if isinstance(x, str) and x.endswith('%'):
+            x = monitor['x'] + (monitor['width'] - geom.width) * int(x[:-1]) // 100
+        else:
+            x = monitor['x'] + (x if x >= 0 else monitor['width'] - geom.width + x)
+
+        if isinstance(y, str) and y.endswith('%'):
+            y = monitor['y'] + (monitor['height'] - geom.height) * int(y[:-1]) // 100
+        else:
+            y = monitor['y'] + (y if y >= 0 else monitor['height'] - geom.height + y)
+
+        window.configure(
+            x=x,
+            y=y
+        )
 
 def main():
     wm = XdumonPy()
