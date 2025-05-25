@@ -4,12 +4,14 @@ import os
 import sys
 import subprocess
 import re
+import time
 from Xlib import X, XK, display
 
 # 基本的な設定
 INIT_PTR_POS = 30  # マウスポインタの初期位置
 WINDOW_MIN_WIDTH = 1920/8  # ウィンドウの最小幅
 WINDOW_MIN_HEIGHT = 1280/8  # ウィンドウの最小高さ
+DRAG_INTERVAL = 1/60  # ドラッグ更新の間隔（秒）
 
 # 仮想スクリーンの設定
 MAX_VSCREEN = 4  # 仮想スクリーンの最大数
@@ -42,12 +44,18 @@ class XdumonPy:
         self.window_vscreen = {}  # ウィンドウと仮想スクリーンの対応を保持
         self.current_vscreen = 0  # 現在の仮想スクリーン番号
         
+        # ドラッグ操作用の変数
+        self.start = None  # ドラッグ開始時のイベント情報
+        self.start_geom = None  # ドラッグ開始時のウィンドウジオメトリ
+        self.last_dragged_time = time.time()  # 最後のドラッグ更新時刻
+        
         # モニター情報の初期化
         self.monitor_geometries = self.get_available_monitor_geometries()
         self.maxsize = self.get_screen_size()
         
         # イベントの捕捉を開始
         self.catch_events()
+        self.grab_buttons()
         
         # 既存のウィンドウを管理対象に追加
         for child in self.screen.root.query_tree().children:
@@ -203,7 +211,91 @@ class XdumonPy:
             X.SubstructureNotifyMask |
             X.EnterWindowMask |
             X.LeaveWindowMask |
-            X.FocusChangeMask)
+            X.FocusChangeMask |
+            X.ButtonPressMask |
+            X.ButtonReleaseMask |
+            X.PointerMotionMask)
+
+    def grab_buttons(self):
+        """マウスボタンのグラブ設定"""
+        debug('function: grab_buttons called')
+        # Alt + 左クリックでウィンドウ移動
+        # Alt + 右クリックでウィンドウリサイズ
+        for button in [1, 3]:  # 1: 左クリック, 3: 右クリック
+            self.screen.root.grab_button(
+                button,
+                X.Mod1Mask,  # Alt キー
+                True,
+                X.ButtonPressMask |
+                X.ButtonReleaseMask |
+                X.PointerMotionMask,
+                X.GrabModeAsync,
+                X.GrabModeAsync,
+                X.NONE,
+                X.NONE)
+
+    def handle_button_press(self, event):
+        """マウスボタンが押された時の処理"""
+        debug('handler: handle_button_press called')
+        window = event.child
+        if window not in self.managed_windows.keys():
+            return
+
+        # ポインタをグラブしてドラッグ操作の準備
+        self.screen.root.grab_pointer(
+            True,
+            X.PointerMotionMask |
+            X.ButtonReleaseMask,
+            X.GrabModeAsync,
+            X.GrabModeAsync,
+            X.NONE,
+            X.NONE,
+            0)
+
+        self.start = event
+        self.start_geom = self.get_window_geometry(window)
+
+    def handle_button_release(self, event):
+        """マウスボタンが離された時の処理"""
+        debug('handler: handle_button_release called')
+        self.display.ungrab_pointer(0)
+        if event.child in self.managed_windows:
+            # ウィンドウの所属モニターを更新
+            self.managed_windows[event.child] = self.get_monitor_geometry_with_window(event.child)
+
+    def handle_motion_notify(self, event):
+        """マウスポインタが移動した時の処理"""
+        debug('handler: handle_motion_notify called')
+        if self.start is None or self.start.child == X.NONE:
+            return
+
+        # ドラッグ更新の間隔制御
+        now = time.time()
+        if now - self.last_dragged_time < DRAG_INTERVAL:
+            return
+        self.last_dragged_time = now
+
+        # マウスの移動量を計算
+        xdiff = event.root_x - self.start.root_x
+        ydiff = event.root_y - self.start.root_y
+
+        if self.start.detail == 1:  # 左クリックドラッグ: 移動
+            self.start.child.configure(
+                x=self.start_geom.x + xdiff,
+                y=self.start_geom.y + ydiff
+            )
+        elif self.start.detail == 3:  # 右クリックドラッグ: リサイズ
+            # 最小サイズのチェック
+            new_width = self.start_geom.width + xdiff
+            new_height = self.start_geom.height + ydiff
+            
+            if new_width <= WINDOW_MIN_WIDTH or new_height <= WINDOW_MIN_HEIGHT:
+                return
+                
+            self.start.child.configure(
+                width=new_width,
+                height=new_height
+            )
 
     def manage_window(self, window):
         """新しいウィンドウを管理対象に追加"""
@@ -239,11 +331,16 @@ class XdumonPy:
         """メインイベントループ"""
         while True:
             event = self.display.next_event()
-            # イベントの種類に応じて適切なハンドラを呼び出す
             if event.type == X.MapRequest:
                 self.handle_map_request(event)
             elif event.type == X.DestroyNotify:
                 self.handle_destroy_notify(event)
+            elif event.type == X.ButtonPress:
+                self.handle_button_press(event)
+            elif event.type == X.ButtonRelease:
+                self.handle_button_release(event)
+            elif event.type == X.MotionNotify:
+                self.handle_motion_notify(event)
 
     def handle_map_request(self, event):
         """新しいウィンドウが作成された時のハンドラ"""
