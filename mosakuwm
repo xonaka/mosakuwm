@@ -2008,6 +2008,53 @@ LAYOUT_PRESETS = {
         debug('handler: handle_randr_notify called')
         self.monitor_manager.update_monitors()
 
+    def apply_layout(self, window):
+        """ウィンドウにレイアウトを適用"""
+        debug('function: apply_layout called')
+        
+        # 現在のレイアウトが設定されていない場合は何もしない
+        if not self.current_layout:
+            return
+            
+        # レイアウトプリセットを取得
+        preset = self.config.LAYOUT_PRESETS.get(self.current_layout)
+        if not preset:
+            return
+            
+        # ウィンドウのクラスを取得
+        window_class = self.get_window_class(window)
+        if not window_class:
+            return
+            
+        # プリセット内のウィンドウ設定を検索
+        window_config = None
+        for config in preset['windows']:
+            if config['class'] == window_class:
+                window_config = config
+                break
+                
+        if not window_config:
+            return
+            
+        # モニター情報を取得
+        monitor = self.get_primary_monitor()
+        if not monitor:
+            return
+            
+        # ウィンドウの位置とサイズを計算
+        x, y, width, height = self.calculate_window_geometry(window_config, monitor)
+        
+        # ウィンドウを設定された位置に移動
+        window.configure(
+            x=x,
+            y=y,
+            width=width,
+            height=height
+        )
+        
+        # レイアウト管理用の辞書に追加
+        self.layout_windows[window] = window_config
+
 def main():
     wm = Mosakuwm()
     try:
