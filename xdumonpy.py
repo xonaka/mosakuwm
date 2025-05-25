@@ -5,6 +5,7 @@ import sys
 import subprocess
 import re
 import time
+import math
 from Xlib import X, XK, display
 
 # 基本的な設定
@@ -22,6 +23,7 @@ FRAME_THICKNESS = 2  # フレームの太さ
 TERMINAL = 'urxvt'  # 端末エミュレータ
 EDITOR = 'emacs'    # エディタ
 BROWSER = 'google-chrome'  # ブラウザ
+PRIORITY_WINDOW = EDITOR  # タイル配置時に優先するウィンドウ
 
 # 仮想スクリーンの設定
 MAX_VSCREEN = 4  # 仮想スクリーンの最大数
@@ -93,6 +95,9 @@ KEY_BINDS = {
     ('a', X.Mod1Mask | X.ControlMask): {
         'method': 'cb_send_window_to_next_vscreen',
         'arg': BACKWARD
+    },
+    ('t', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_tile_windows'
     }
 }
 
@@ -675,6 +680,97 @@ class XdumonPy:
         """フレームウィンドウを非表示"""
         for side in ['left', 'right', 'upper', 'lower']:
             self.frame_windows[side].unmap()
+
+    def get_tile_layout(self, tile_num):
+        """タイル配置のレイアウトを計算"""
+        debug('function: get_tile_layout called')
+        tmp = int(math.sqrt(tile_num))
+        # (row, col)を返す
+        if tmp**2 == tile_num:
+            return (tmp, tmp)
+        if (tmp+1)*tmp >= tile_num:
+            return (tmp, tmp+1)
+        return (tmp+1, tmp+1)
+
+    def tile_windows(self, window):
+        """ウィンドウをタイル状に配置"""
+        debug('function: tile_windows called')
+        # 現在のモニターを取得
+        monitor = self.managed_windows.get(window, None)
+        if monitor is None:
+            return
+
+        # 現在のモニターに表示されているウィンドウを収集
+        target_windows = []
+        for win in self.exposed_windows:
+            if monitor == self.managed_windows.get(win, None):
+                target_windows.append(win)
+
+        # ウィンドウをIDでソート（安定した配置のため）
+        def sort_key(window):
+            return window.id
+        target_windows.sort(key=sort_key)
+
+        # エディタウィンドウを優先的に配置
+        eidx = None
+        for i in range(len(target_windows)):
+            if PRIORITY_WINDOW in self.get_window_class(target_windows[i]).lower():
+                eidx = i
+
+        # レイアウトの計算
+        nrows, ncols = self.get_tile_layout(len(target_windows))
+        offcuts_num = nrows*ncols - len(target_windows)
+
+        # エディタウィンドウを左下に配置
+        if eidx is not None:
+            target_windows[eidx], target_windows[ncols*(nrows-1)-1] = \
+                target_windows[ncols*(nrows-1)-1], target_windows[eidx]
+
+        # ウィンドウの配置
+        for row in reversed(range(nrows)):
+            for col in reversed(range(ncols)):
+                if not target_windows:
+                    break
+                win = target_windows.pop(0)
+                
+                # 位置とサイズの計算
+                x = monitor['x'] + monitor['width']*col//ncols
+                width = monitor['width']//ncols
+                
+                # 下段の空きスペースを利用
+                if row == 1 and col < offcuts_num:
+                    height = monitor['height']*2//nrows
+                    y = monitor['y']
+                else:
+                    height = monitor['height']//nrows
+                    y = monitor['y'] + monitor['height']*row//nrows
+                
+                # ウィンドウの設定
+                win.configure(
+                    x=x,
+                    y=y,
+                    width=width,
+                    height=height
+                )
+
+        # ポインタを移動
+        window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+
+    def cb_tile_windows(self, event):
+        """タイル配置のコールバック"""
+        debug('callback: cb_tile_windows called')
+        if not self.framed_window:
+            return
+        self.tile_windows(self.framed_window)
+        self.focus_window(self.framed_window)
+
+    def get_window_class(self, window):
+        """ウィンドウのクラス名を取得"""
+        try:
+            cmd, cls = window.get_wm_class()
+            return cls if cls is not None else ''
+        except:
+            return ''
 
 def main():
     wm = XdumonPy()
