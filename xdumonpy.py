@@ -13,6 +13,11 @@ WINDOW_MIN_WIDTH = 1920/8  # ウィンドウの最小幅
 WINDOW_MIN_HEIGHT = 1280/8  # ウィンドウの最小高さ
 DRAG_INTERVAL = 1/60  # ドラッグ更新の間隔（秒）
 
+# アプリケーション設定
+TERMINAL = 'urxvt'  # 端末エミュレータ
+EDITOR = 'emacs'    # エディタ
+BROWSER = 'google-chrome'  # ブラウザ
+
 # 仮想スクリーンの設定
 MAX_VSCREEN = 4  # 仮想スクリーンの最大数
 
@@ -26,6 +31,66 @@ LOWER = 8
 FORWARD = 0
 BACKWARD = 1
 
+# キーバインドの定義
+KEY_BINDS = {
+    ('i', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_focus_next_window',
+        'arg': FORWARD
+    },
+    ('1', X.Mod1Mask | X.ControlMask): {
+        'command': f'{TERMINAL} &'
+    },
+    ('2', X.Mod1Mask | X.ControlMask): {
+        'command': f'{EDITOR} &'
+    },
+    ('3', X.Mod1Mask | X.ControlMask): {
+        'command': f'{BROWSER} &'
+    },
+    ('h', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_halve_window',
+        'arg': LEFT
+    },
+    ('l', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_halve_window',
+        'arg': RIGHT
+    },
+    ('j', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_halve_window',
+        'arg': LOWER
+    },
+    ('k', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_halve_window',
+        'arg': UPPER
+    },
+    ('n', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_move_window_to_next_monitor'
+    },
+    ('F1', X.Mod1Mask): {
+        'method': 'cb_select_vscreen',
+        'arg': 0
+    },
+    ('F2', X.Mod1Mask): {
+        'method': 'cb_select_vscreen',
+        'arg': 1
+    },
+    ('F3', X.Mod1Mask): {
+        'method': 'cb_select_vscreen',
+        'arg': 2
+    },
+    ('F4', X.Mod1Mask): {
+        'method': 'cb_select_vscreen',
+        'arg': 3
+    },
+    ('d', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_send_window_to_next_vscreen',
+        'arg': FORWARD
+    },
+    ('a', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_send_window_to_next_vscreen',
+        'arg': BACKWARD
+    }
+}
+
 def debug(msg):
     """デバッグメッセージを標準エラー出力に出力"""
     print(msg, file=sys.stderr, flush=True)
@@ -36,9 +101,14 @@ class XdumonPy:
         self.screen = self.display.screen()
         self.colormap = self.screen.default_colormap
         
+        # キーバインド関連
+        self.keybinds = {}
+        self.pressed_keys = set()
+        
         # ウィンドウ管理用の辞書とリスト
         self.managed_windows = {}  # 管理対象のウィンドウを保持
         self.exposed_windows = []  # 表示中のウィンドウを保持
+        self.framed_window = None  # 現在フォーカスのあるウィンドウ
         
         # 仮想スクリーン関連
         self.window_vscreen = {}  # ウィンドウと仮想スクリーンの対応を保持
@@ -56,6 +126,7 @@ class XdumonPy:
         # イベントの捕捉を開始
         self.catch_events()
         self.grab_buttons()
+        self.grab_keys()
         
         # 既存のウィンドウを管理対象に追加
         for child in self.screen.root.query_tree().children:
@@ -234,6 +305,24 @@ class XdumonPy:
                 X.NONE,
                 X.NONE)
 
+    def grab_keys(self):
+        """キーバインドの設定"""
+        debug('function: grab_keys called')
+        for (key, modifier), rule in KEY_BINDS.items():
+            keysym = XK.string_to_keysym(key)
+            keycode = self.display.keysym_to_keycode(keysym)
+            if modifier is None:
+                continue
+            self.screen.root.grab_key(
+                keycode,
+                modifier,
+                True,
+                X.GrabModeAsync,
+                X.GrabModeAsync
+            )
+            self.keybinds[(keycode, modifier)] = rule
+            debug(f'debug: ({key}, {modifier}) grabbed as ({keycode}, {modifier})')
+
     def handle_button_press(self, event):
         """マウスボタンが押された時の処理"""
         debug('handler: handle_button_press called')
@@ -327,6 +416,107 @@ class XdumonPy:
         except:
             return None
 
+    def handle_key_press(self, event):
+        """キーが押された時の処理"""
+        debug('handler: handle_key_press called')
+        keycode = event.detail
+        modifier = event.state
+        entry = (keycode, modifier)
+        
+        rule = self.keybinds.get(entry, None)
+        if rule:
+            if 'method' in rule:
+                method = getattr(self, rule['method'], None)
+                if method:
+                    arg = rule.get('arg', None)
+                    if arg is not None:
+                        method(event, arg)
+                    else:
+                        method(event)
+            elif 'command' in rule:
+                os.system(rule['command'])
+
+    def cb_focus_next_window(self, event, direction=FORWARD):
+        """次のウィンドウにフォーカスを移動"""
+        debug('callback: cb_focus_next_window called')
+        if not self.exposed_windows:
+            return
+            
+        if self.framed_window in self.exposed_windows:
+            idx = self.exposed_windows.index(self.framed_window)
+            if direction == FORWARD:
+                idx = (idx + 1) % len(self.exposed_windows)
+            else:
+                idx = (idx - 1) % len(self.exposed_windows)
+        else:
+            idx = 0
+            
+        next_window = self.exposed_windows[idx]
+        self.focus_window(next_window)
+        next_window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+
+    def focus_window(self, window):
+        """指定したウィンドウにフォーカスを設定"""
+        debug('function: focus_window called')
+        if window not in self.exposed_windows:
+            return
+            
+        window.set_input_focus(X.RevertToParent, 0)
+        window.configure(stack_mode=X.Above)
+        self.framed_window = window
+
+    def cb_halve_window(self, event, direction):
+        """ウィンドウを半分のサイズに変更"""
+        debug('callback: cb_halve_window called')
+        if not self.framed_window:
+            return
+            
+        self.halve_window(self.framed_window, direction)
+        self.framed_window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+
+    def halve_window(self, window, direction):
+        """ウィンドウを指定した方向に半分のサイズにする"""
+        if window not in self.exposed_windows:
+            return
+            
+        geom = self.get_window_geometry(window)
+        if not geom:
+            return
+            
+        if direction & (LEFT | RIGHT) != 0 and geom.width <= WINDOW_MIN_WIDTH:
+            return
+        if direction & (UPPER | LOWER) != 0 and geom.height <= WINDOW_MIN_HEIGHT:
+            return
+            
+        x, y = geom.x, geom.y
+        width, height = geom.width, geom.height
+        
+        if direction & (LEFT | RIGHT) != 0:
+            width //= 2
+        if direction & (UPPER | LOWER) != 0:
+            height //= 2
+            
+        if direction & RIGHT != 0:
+            x += width
+        if direction & LOWER != 0:
+            y += height
+            
+        window.configure(
+            x=x,
+            y=y,
+            width=width,
+            height=height
+        )
+
+    def cb_move_window_to_next_monitor(self, event):
+        """ウィンドウを次のモニターに移動"""
+        debug('callback: cb_move_window_to_next_monitor called')
+        if not self.framed_window:
+            return
+            
+        self.move_window_to_next_monitor(self.framed_window)
+        self.framed_window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+
     def loop(self):
         """メインイベントループ"""
         while True:
@@ -341,6 +531,8 @@ class XdumonPy:
                 self.handle_button_release(event)
             elif event.type == X.MotionNotify:
                 self.handle_motion_notify(event)
+            elif event.type == X.KeyPress:
+                self.handle_key_press(event)
 
     def handle_map_request(self, event):
         """新しいウィンドウが作成された時のハンドラ"""
