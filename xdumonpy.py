@@ -288,6 +288,116 @@ class PresetManager:
                 
         return True
 
+class MonitorManager:
+    """モニター管理を行うクラス"""
+    def __init__(self, wm):
+        self.wm = wm
+        self.monitors = {}
+        self.monitor_configs = {}
+        self.load_monitor_configs()
+        
+    def load_monitor_configs(self):
+        """モニター設定を読み込み"""
+        config_dir = self.wm.ensure_config_dir()
+        config_file = config_dir / 'monitor_config.json'
+        
+        if config_file.exists():
+            try:
+                with open(config_file, 'r') as f:
+                    self.monitor_configs = json.load(f)
+            except json.JSONDecodeError:
+                debug('Invalid monitor config file')
+                
+    def save_monitor_configs(self):
+        """モニター設定を保存"""
+        config_dir = self.wm.ensure_config_dir()
+        config_file = config_dir / 'monitor_config.json'
+        
+        with open(config_file, 'w') as f:
+            json.dump(self.monitor_configs, f, indent=4)
+            
+    def update_monitors(self):
+        """モニター情報を更新"""
+        old_monitors = self.monitors.copy()
+        self.monitors = self.wm.get_monitors_info()
+        
+        # 新しく接続されたモニターを検出
+        for name, monitor in self.monitors.items():
+            if monitor['connected'] and (name not in old_monitors or not old_monitors[name]['connected']):
+                self.handle_monitor_connected(name, monitor)
+                
+        # 切断されたモニターを検出
+        for name, monitor in old_monitors.items():
+            if monitor['connected'] and (name not in self.monitors or not self.monitors[name]['connected']):
+                self.handle_monitor_disconnected(name)
+                
+    def handle_monitor_connected(self, name, monitor):
+        """モニター接続時の処理"""
+        debug(f'Monitor connected: {name}')
+        
+        # 保存された設定を適用
+        if name in self.monitor_configs:
+            config = self.monitor_configs[name]
+            
+            # レイアウトプリセットの適用
+            if 'layout_preset' in config:
+                self.wm.apply_layout_preset(config['layout_preset'])
+                
+            # ウィンドウの再配置
+            if 'window_positions' in config:
+                for window_class, pos in config['window_positions'].items():
+                    for window in self.wm.exposed_windows:
+                        if self.wm.get_window_class(window) == window_class:
+                            window.configure(
+                                x=pos['x'] + monitor['geometry']['x'],
+                                y=pos['y'] + monitor['geometry']['y']
+                            )
+                            
+    def handle_monitor_disconnected(self, name):
+        """モニター切断時の処理"""
+        debug(f'Monitor disconnected: {name}')
+        
+        # 現在のウィンドウ配置を保存
+        if name not in self.monitor_configs:
+            self.monitor_configs[name] = {}
+            
+        config = self.monitor_configs[name]
+        config['window_positions'] = {}
+        
+        for window in self.wm.exposed_windows:
+            if self.wm.managed_windows.get(window, {}).get('name') == name:
+                geom = self.wm.get_window_geometry(window)
+                if geom:
+                    window_class = self.wm.get_window_class(window)
+                    config['window_positions'][window_class] = {
+                        'x': geom.x - self.monitors[name]['geometry']['x'],
+                        'y': geom.y - self.monitors[name]['geometry']['y']
+                    }
+                    
+        self.save_monitor_configs()
+        
+        # ウィンドウをプライマリモニターに移動
+        primary = self.get_primary_monitor()
+        if primary and primary['name'] != name:
+            for window in self.wm.exposed_windows:
+                if self.wm.managed_windows.get(window, {}).get('name') == name:
+                    self.wm.move_window_to_monitor(window, primary)
+                    
+    def get_primary_monitor(self):
+        """プライマリモニターを取得"""
+        for name, monitor in self.monitors.items():
+            if monitor['connected'] and monitor['primary']:
+                monitor['name'] = name
+                return monitor
+        return None
+        
+    def set_monitor_layout_preset(self, monitor_name, preset_name):
+        """モニターのデフォルトレイアウトプリセットを設定"""
+        if monitor_name not in self.monitor_configs:
+            self.monitor_configs[monitor_name] = {}
+        self.monitor_configs[monitor_name]['layout_preset'] = preset_name
+        self.save_monitor_configs()
+
 class XdumonPy:
     def __init__(self):
         self.display = display.Display()
@@ -349,6 +459,9 @@ class XdumonPy:
 
         # プリセットマネージャーの初期化
         self.preset_manager = PresetManager(self)
+        
+        # モニターマネージャーの初期化
+        self.monitor_manager = MonitorManager(self)
 
     def get_screen_size(self):
         """スクリーン全体のサイズを取得"""
@@ -502,7 +615,9 @@ class XdumonPy:
             X.FocusChangeMask |
             X.ButtonPressMask |
             X.ButtonReleaseMask |
-            X.PointerMotionMask)
+            X.PointerMotionMask |
+            X.RRScreenChangeNotifyMask  # RandRイベントを追加
+        )
 
     def grab_buttons(self):
         """マウスボタンのグラブ設定"""
@@ -774,6 +889,8 @@ class XdumonPy:
                 self.handle_motion_notify(event)
             elif event.type == X.KeyPress:
                 self.handle_key_press(event)
+            elif event.type == self.display.extension_event.RRScreenChangeNotify:
+                self.handle_randr_notify(event)
 
     def handle_map_request(self, event):
         """新しいウィンドウが作成された時のハンドラ"""
@@ -1843,6 +1960,11 @@ LAYOUT_PRESETS = {
         """プリセット検索表示のコールバック"""
         debug('callback: cb_show_preset_search called')
         self.show_preset_search()
+
+    def handle_randr_notify(self, event):
+        """RandRイベントのハンドラ（モニター接続状態の変更）"""
+        debug('handler: handle_randr_notify called')
+        self.monitor_manager.update_monitors()
 
 def main():
     wm = XdumonPy()
