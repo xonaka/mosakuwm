@@ -503,6 +503,7 @@ class Mosakuwm:
             height=height
         )
         self.managed_windows[window] = dst
+        self.draw_frame_windows()
 
     def move_window_to_next_monitor(self, window):
         """ウィンドウを次のモニターに移動"""
@@ -645,15 +646,17 @@ class Mosakuwm:
             return
         # フレーム化・reparentをやめる
         self.managed_windows[window] = self.get_monitor_geometry_with_window(window)
-        self.exposed_windows.append(window)
+        # 仮想スクリーン割り当て
         self.window_vscreen[window] = self.current_vscreen
+        # 表示更新
+        self.update_visible_windows()
         self.apply_window_rules(window)
         self.apply_layout(window)
-        window.map()  # ここでmap
         window.change_attributes(
             event_mask=X.EnterWindowMask | X.LeaveWindowMask
         )
         window.configure(stack_mode=X.Above)
+        self.draw_frame_windows()
 
     def get_window_attributes(self, window):
         """ウィンドウの属性を取得"""
@@ -765,6 +768,7 @@ class Mosakuwm:
             width=width,
             height=height
         )
+        self.draw_frame_windows()
 
     def cb_move_window_to_next_monitor(self, event):
         """ウィンドウを次のモニターに移動"""
@@ -825,32 +829,21 @@ class Mosakuwm:
         debug('function: select_vscreen called')
         if num < 0 or num >= self.config.MAX_VSCREEN:
             return
-
         self.current_vscreen = num
-        self.exposed_windows = []
-
-        # 現在の仮想スクリーンに属するウィンドウのみを表示
-        for window in self.managed_windows.keys():
-            if self.window_vscreen[window] == num:
-                window.map()
-                self.exposed_windows.append(window)
-            else:
-                window.unmap()
+        self.update_visible_windows()
 
     def send_window_to_next_vscreen(self, window, direction):
         """ウィンドウを次または前の仮想スクリーンに移動"""
         debug('function: send_window_to_next_vscreen called')
-        if window not in self.exposed_windows:
-            return None
-
-        current_idx = self.window_vscreen[window]
-        if direction == FORWARD:
-            next_idx = (current_idx + 1) % self.config.MAX_VSCREEN
-        else:
-            next_idx = (current_idx - 1) % self.config.MAX_VSCREEN
-
-        self.window_vscreen[window] = next_idx
-        return next_idx
+        if window not in self.managed_windows:
+            return
+        cur = self.window_vscreen.get(window, 0)
+        if direction == 0:  # FORWARD
+            next_v = (cur + 1) % self.config.MAX_VSCREEN
+        else:  # BACKWARD
+            next_v = (cur - 1) % self.config.MAX_VSCREEN
+        self.window_vscreen[window] = next_v
+        self.update_visible_windows()
 
     def create_frame_windows(self):
         """フレームウィンドウの作成"""
@@ -1247,6 +1240,7 @@ class Mosakuwm:
         
         # レイアウト管理用の辞書に追加
         self.layout_windows[window] = window_config
+        self.draw_frame_windows()
 
     def maximize_window(self, window, mask):
         if window not in self.exposed_windows:
@@ -1278,6 +1272,23 @@ class Mosakuwm:
             self.maximize_window(window, mask)
             window.warp_pointer(self.config.INIT_PTR_POS, self.config.INIT_PTR_POS)
             self.draw_frame_windows()
+
+    def update_visible_windows(self):
+        """現在の仮想スクリーンに属するウィンドウだけmap/unmap"""
+        self.exposed_windows = []
+        for window in self.managed_windows:
+            if self.window_vscreen.get(window, 0) == self.current_vscreen:
+                window.map()
+                self.exposed_windows.append(window)
+            else:
+                window.unmap()
+
+    def cb_select_vscreen(self, event, num):
+        self.select_vscreen(num)
+
+    def cb_send_window_to_next_vscreen(self, event, direction):
+        if self.framed_window:
+            self.send_window_to_next_vscreen(self.framed_window, direction)
 
 def main():
     wm = Mosakuwm()
