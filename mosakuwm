@@ -833,7 +833,7 @@ class Mosakuwm:
         self.update_visible_windows()
 
     def send_window_to_next_vscreen(self, window, direction):
-        """ウィンドウを次または前の仮想スクリーンに移動"""
+        """ウィンドウを次または前の仮想スクリーンに移動し、作業場所も追従"""
         debug('function: send_window_to_next_vscreen called')
         if window not in self.managed_windows:
             return
@@ -843,6 +843,8 @@ class Mosakuwm:
         else:  # BACKWARD
             next_v = (cur - 1) % self.config.MAX_VSCREEN
         self.window_vscreen[window] = next_v
+        # ここで作業場所もウィンドウの移動先に合わせて切り替える
+        self.current_vscreen = next_v
         self.update_visible_windows()
 
     def create_frame_windows(self):
