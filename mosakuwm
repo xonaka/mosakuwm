@@ -4,392 +4,651 @@ import os
 import sys
 import subprocess
 import re
+import datetime
 import time
 import math
-import importlib.util
-import logging
-import traceback
-from pathlib import Path
+import signal
 from Xlib import X, XK, display
-from Xlib.ext import randr  # RandR拡張を追加
-from threading import Thread
-import json
+from Xlib.ext import randr
 
-# ロガーの設定
-logger = logging.getLogger('mosakuwm')
-logger.setLevel(logging.DEBUG)
-fh = logging.FileHandler('debug.log', mode='w')
-fh.setLevel(logging.DEBUG)
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-fh.setFormatter(formatter)
-logger.addHandler(fh)
+# --- mosakuwm 設定・定数 ---
+# ウィンドウ操作や見た目の基本パラメータ
+INIT_PTR_POS = 30  # ウィンドウ操作時のポインタ初期位置
+WINDOW_MIN_WIDTH = 1920/8  # ウィンドウの最小幅
+WINDOW_MIN_HEIGHT = 1280/8  # ウィンドウの最小高さ
+DRAG_INTERVAL = 1/60  # ドラッグ時の最小間隔（秒）
 
-# --- PresetManagerのダミークラスを追加 ---
-class PresetManager:
-    def __init__(self, wm):
-        pass
-
-def load_config():
-    """設定ファイルを読み込む"""
-    # 設定ファイルの検索順序
-    config_paths = [
-        Path.cwd() / 'config.py',  # カレントディレクトリ
-        Path.home() / '.config' / 'mosakuwm' / 'config.py',  # ユーザー設定
-    ]
-
-    # デフォルト設定
-    class DefaultConfig:
-        # アプリケーション設定
-        TERMINAL = 'urxvt'
-        EDITOR = 'emacs'
-        BROWSER = 'google-chrome'
-        PRIORITY_WINDOW = EDITOR
-
-        # ウィンドウ設定
-        WINDOW_MIN_WIDTH = 1920/8
-        WINDOW_MIN_HEIGHT = 1280/8
-        INIT_PTR_POS = 30
-
-        # フレーム設定
-        FRAME_COLOR = 'SteelBlue3'
-        FRAME_SPECIAL_COLOR = 'orange'
-        FRAME_THICKNESS = 2
-
-        # 仮想スクリーン設定
-        MAX_VSCREEN = 4
-
-        # タイル配置設定
-        TILE_RATIOS = {
-            'main_pane_ratio': 0.6,
-            'grid_main_ratio': 0.5,
-            'horizontal_ratios': [0.5],
-            'vertical_ratios': [0.5],
-        }
-
-        # キーバインド設定
-        KEY_BINDS = {}
-
-        # パフォーマンス設定
-        DRAG_INTERVAL = 1/60
-
-        # ウィンドウルール設定
-        WINDOW_RULES = {}
-        WINDOW_POSITIONS = {}
-
-        # レイアウトプリセット設定
-        LAYOUT_PRESETS = {}
-
-    config = DefaultConfig
-
-    # 設定ファイルの読み込み
-    for config_path in config_paths:
-        if config_path.exists():
-            try:
-                spec = importlib.util.spec_from_file_location("config", config_path)
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                config = module
-                debug(f'設定を読み込みました: {config_path}')
-                break
-            except Exception as e:
-                debug(f'設定の読み込みに失敗しました: {config_path} - {str(e)}')
-
-    return config
-
-def debug(msg):
-    """デバッグメッセージをログファイルと標準エラー出力に出力"""
-    logger.debug(msg)
-    print(msg, file=sys.stderr, flush=True)
-
-def error(msg, exc_info=None):
-    """エラーメッセージをログに出力"""
-    if exc_info:
-        logger.error(f"{msg}\n{traceback.format_exc()}")
-    else:
-        logger.error(msg)
-
-def info(msg):
-    """情報メッセージをログに出力"""
-    logger.info(msg)
-
-# 定数定義
+# ウィンドウ分割・移動用のビットマスク
 LEFT = 1
 RIGHT = 2
 UPPER = 4
 LOWER = 8
-HORIZONTAL = 16
-VERTICAL = 32
-
-# 移動方向の定数
+HORIZONTAL = 1
+VERTICAL = 2
 FORWARD = 0
 BACKWARD = 1
 
-# タイル配置パターンの定数
-TILE_PATTERN_GRID = 0
-TILE_PATTERN_HORIZONTAL = 1
-TILE_PATTERN_VERTICAL = 2
+MAX_VSCREEN = 4  # 仮想スクリーン最大数
 
-class WindowAnimation:
-    """ウィンドウアニメーションを管理するクラス"""
-    def __init__(self, window, start_geom, end_geom, duration=0.3, fps=60):
-        self.window = window
-        self.start_geom = start_geom
-        self.end_geom = end_geom
-        self.duration = duration
-        self.interval = 1.0 / fps
-        self.start_time = None
-        
-    def start(self):
-        """アニメーションを開始"""
-        self.start_time = time.time()
-        Thread(target=self._animate).start()
-        
-    def _animate(self):
-        """アニメーションのメインループ"""
-        while True:
-            current_time = time.time()
-            progress = (current_time - self.start_time) / self.duration
-            
-            if progress >= 1:
-                # 最終位置に設定
-                self.window.configure(
-                    x=self.end_geom['x'],
-                    y=self.end_geom['y'],
-                    width=self.end_geom['width'],
-                    height=self.end_geom['height']
-                )
-                break
-                
-            # イージング関数を適用（ease-in-out）
-            t = progress
-            if t < 0.5:
-                progress = 2 * t * t
-            else:
-                t = 2 * t - 1
-                progress = -0.5 * (t * (t - 2) - 1)
-                
-            # 現在の位置とサイズを計算
-            current_x = self.start_geom['x'] + (self.end_geom['x'] - self.start_geom['x']) * progress
-            current_y = self.start_geom['y'] + (self.end_geom['y'] - self.start_geom['y']) * progress
-            current_width = self.start_geom['width'] + (self.end_geom['width'] - self.start_geom['width']) * progress
-            current_height = self.start_geom['height'] + (self.end_geom['height'] - self.start_geom['height']) * progress
-            
-            # ウィンドウを更新
-            self.window.configure(
-                x=int(current_x),
-                y=int(current_y),
-                width=int(current_width),
-                height=int(current_height)
-            )
-            
-            time.sleep(self.interval)
+EDITOR = 'emacs'  # 優先エディタ
+TERMINAL = 'urxvt'  # デフォルト端末
+BROWSER = 'google-chrome'  # デフォルトブラウザ
+PRIORITY_WINDOW = EDITOR  # タイル時に優先するウィンドウ
 
-class MonitorManager:
-    """モニター管理を行うクラス"""
-    def __init__(self, wm):
-        self.wm = wm
-        self.monitors = {}
-        self.monitor_configs = {}
-        self.load_monitor_configs()
-        
-    def load_monitor_configs(self):
-        """モニター設定を読み込み"""
-        config_dir = self.wm.ensure_config_dir()
-        config_file = config_dir / 'monitor_config.json'
-        
-        if config_file.exists():
-            try:
-                with open(config_file, 'r') as f:
-                    self.monitor_configs = json.load(f)
-            except json.JSONDecodeError:
-                debug('Invalid monitor config file')
-                
-    def save_monitor_configs(self):
-        """モニター設定を保存"""
-        config_dir = self.wm.ensure_config_dir()
-        config_file = config_dir / 'monitor_config.json'
-        
-        with open(config_file, 'w') as f:
-            json.dump(self.monitor_configs, f, indent=4)
-            
-    def update_monitors(self):
-        """モニター情報を更新"""
-        old_monitors = self.monitors.copy()
-        self.monitors = self.wm.get_monitors_info()
-        
-        # 新しく接続されたモニターを検出
-        for name, monitor in self.monitors.items():
-            if monitor['connected'] and (name not in old_monitors or not old_monitors[name]['connected']):
-                self.handle_monitor_connected(name, monitor)
-                
-        # 切断されたモニターを検出
-        for name, monitor in old_monitors.items():
-            if monitor['connected'] and (name not in self.monitors or not self.monitors[name]['connected']):
-                self.handle_monitor_disconnected(name)
-                
-    def handle_monitor_connected(self, name, monitor):
-        """モニター接続時の処理"""
-        debug('handler: handle_monitor_connected called')
-        debug(f'Monitor connected: {name}')
-        
-        # 保存された設定を適用
-        if name in self.monitor_configs:
-            config = self.monitor_configs[name]
-            
-            # レイアウトプリセットの適用
-            if 'layout_preset' in config:
-                self.wm.apply_layout_preset(config['layout_preset'])
-                
-            # ウィンドウの再配置
-            if 'window_positions' in config:
-                for window_class, pos in config['window_positions'].items():
-                    for window in self.wm.exposed_windows:
-                        if self.wm.get_window_class(window) == window_class:
-                            window.configure(
-                                x=pos['x'] + monitor['geometry']['x'],
-                                y=pos['y'] + monitor['geometry']['y']
-                            )
-                            
-    def handle_monitor_disconnected(self, name):
-        """モニター切断時の処理"""
-        debug('handler: handle_monitor_disconnected called')
-        debug(f'Monitor disconnected: {name}')
-        
-        # 現在のウィンドウ配置を保存
-        if name not in self.monitor_configs:
-            self.monitor_configs[name] = {}
-            
-        config = self.monitor_configs[name]
-        config['window_positions'] = {}
-        
-        for window in self.wm.exposed_windows:
-            if self.wm.managed_windows.get(window, {}).get('name') == name:
-                geom = self.wm.get_window_geometry(window)
-                if geom:
-                    window_class = self.wm.get_window_class(window)
-                    config['window_positions'][window_class] = {
-                        'x': geom.x - self.monitors[name]['geometry']['x'],
-                        'y': geom.y - self.monitors[name]['geometry']['y']
-                    }
-                    
-        self.save_monitor_configs()
-        
-        # ウィンドウをプライマリモニターに移動
-        primary = self.get_primary_monitor()
-        if primary and primary['name'] != name:
-            for window in self.wm.exposed_windows:
-                if self.wm.managed_windows.get(window, {}).get('name') == name:
-                    self.wm.move_window_to_monitor(window, primary)
-                    
-    def get_primary_monitor(self):
-        """プライマリモニターを取得"""
-        for name, monitor in self.monitors.items():
-            if monitor['connected'] and monitor['primary']:
-                monitor['name'] = name
-                return monitor
-        return None
-        
-    def set_monitor_layout_preset(self, monitor_name, preset_name):
-        """モニターのデフォルトレイアウトプリセットを設定"""
-        if monitor_name not in self.monitor_configs:
-            self.monitor_configs[monitor_name] = {}
-        self.monitor_configs[monitor_name]['layout_preset'] = preset_name
-        self.save_monitor_configs()
+FRAME_COLOR = 'SteelBlue3'  # 通常枠色
+FRAME_SPECIAL_COLOR = 'orange'  # 特殊枠色
+FRAME_THICKNESS = 2  # 枠の太さ
+FONT = '-misc-fixed-bold-r-normal--18-120-100-100-c-90-iso10646-1'  # フォント
+SCREENSHOT_DIR = f'{os.getenv("HOME")}/screenshots'  # スクリーンショット保存先
+RECORDING_PROCESS = None  # 録画プロセス管理
 
-class Mosakuwm:
+# --- Xイベントとハンドラの対応表 ---
+# Xlibイベントタイプとmosakuwmのハンドラ名を紐付ける
+# XRandRイベントは__init__で動的に追加
+EVENTS = {
+    X.ButtonPress: 'handle_button_press',
+    X.ButtonRelease: 'handle_button_release',
+    X.MotionNotify: 'handle_motion_notify',
+    X.EnterNotify: 'handle_enter_notify',
+    X.MapNotify: 'handle_map_notify',
+    X.UnmapNotify: 'handle_unmap_notify',
+    X.MapRequest: 'handle_map_request',
+    X.DestroyNotify: 'handle_destroy_notify',
+    X.KeyPress: 'handle_key_press',
+    X.KeyRelease: 'handle_key_release',
+    X.ConfigureRequest: 'handle_configure_request'
+    # XRandRイベントは__init__で追加
+}
+
+
+KEY_BINDS = {
+    # --- アプリ起動系 ---  
+    # アプリ起動
+    ('1', X.Mod1Mask | X.ControlMask): {
+        'command': f'{TERMINAL} &'
+    },
+    ('2', X.Mod1Mask | X.ControlMask): {
+        'command': f'{EDITOR} &'
+    },
+    ('3', X.Mod1Mask | X.ControlMask):{
+        'command': f'{BROWSER} &'
+    },
+    ('4', X.Mod1Mask | X.ControlMask):{
+        'command': 'emacs -nw $HOME/memo.txt || emacs $HOME/memo.txt &'
+    },
+    ('6', X.Mod1Mask | X.ControlMask):{
+        'command' : 'qutebrowser &'
+    },
+    ('7', X.Mod1Mask | X.ControlMask):{
+        'command' : 'pkill zotero || zotero &'
+    },
+    ('8', X.Mod1Mask | X.ControlMask):{
+        'command' : 'pkill mpg321 || mpg321 ~/Music/pianotoame &'
+    },
+    ('v', X.Mod1Mask | X.ControlMask):{
+        'command': 'pkill mosakumonitor || mosakumonitor 1 &'
+    },
+    ('p', X.Mod1Mask | X.ControlMask): {
+        'command': 'pkill xkbpointer && xset r || xkbpointer &' 
+    },
+    ('F11', X.Mod1Mask): {
+        'command': 'mp4totxt &',
+    },
+
+    # --- ウィンドウ操作系 ---
+    # フォーカス・移動・分割・最大化
+    ('i', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_focus_next_window',
+        'arg': FORWARD
+    },
+    ('r', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_raise_window'
+    },
+    ('m', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_maximize_window',
+        'arg': HORIZONTAL | VERTICAL
+    },
+    ('comma', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_maximize_window',
+        'arg': VERTICAL
+    },
+    ('h', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_halve_window',
+        'arg': LEFT
+    },
+    ('l', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_halve_window',
+        'arg': RIGHT
+    },
+    ('j', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_halve_window',
+        'arg': LOWER
+    },
+    ('k', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_halve_window',
+        'arg': UPPER
+    },
+    ('n', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_move_window_to_next_monitor'
+    },
+    ('s', X.Mod1Mask | X.ControlMask):{
+        'method': 'cb_swap_windows_bw_monitors'
+    },
+    ('z', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_destroy_window'
+    },
+    ('t', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_tile_windows'
+    },
+    ('BackSpace', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_set_always_top'
+    },
+    ('b', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_force_external_monitor'
+    },
+    ('5', X.Mod1Mask | X.ControlMask):{
+        'method': 'toggle_xpymon_and_adjust_windows'
+    },
+
+    # --- 仮想スクリーン・ウィンドウ管理系 ---
+    ('F1', X.Mod1Mask): {
+        'method': 'cb_select_vscreen',
+        'arg': 0
+    },
+    ('F2', X.Mod1Mask): {
+        'method': 'cb_select_vscreen',
+        'arg': 1
+    },
+    ('F3', X.Mod1Mask): {
+        'method': 'cb_select_vscreen',
+        'arg': 2
+    },
+    ('F4', X.Mod1Mask): {
+        'method': 'cb_select_vscreen',
+        'arg': 3
+    },
+    ('d', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_send_window_to_next_vscreen',
+        'arg': FORWARD
+    },
+    ('a', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_send_window_to_next_vscreen',
+        'arg': BACKWARD
+    },
+    ('Home', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_reconfigure_monitors',
+        'arg': True
+    },
+    ('End', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_reconfigure_monitors',
+        'arg': False
+    },
+    ('Delete', X.Mod1Mask | X.ControlMask): {
+        'function': 'restart'
+    },
+
+    # --- 音量・録画・メディア系 ---
+    ('F6',  X.Mod1Mask): {
+        'command': 'pactl set-sink-volume @DEFAULT_SINK@ -5%'
+    },
+    ('F7',  X.Mod1Mask): {
+        'command': 'pactl set-sink-volume @DEFAULT_SINK@ +5%',
+    },
+    ('F5',  X.Mod1Mask): {
+        'command': 'pactl set-sink-mute @DEFAULT_SINK@ toggle',
+    },
+    ('F12', X.Mod1Mask): {
+        'method': 'cb_record_screen',
+         'arg': 'current'
+    },    
+}
+
+def debug(str):
+    print(str, file=sys.stderr, flush=True)
+
+def restart():
+    debug(f'restrating {sys.argv[0]}')
+    os.execvp(sys.argv[0], [sys.argv[0]])
+
+class mosakuWM:
+    """
+    Xlibを用いたシンプルなタイル型ウィンドウマネージャ。
+    - 複数モニタ・仮想スクリーン・ウィンドウ枠・自動タイル等に対応
+    - XRandRイベントを監視し、外部ディスプレイ接続時に自動で拡張デスクトップ化
+    注意: Xlibの低レベルAPIを直接扱うため、環境依存の挙動や制約がある
+    """
     def __init__(self):
-        """初期化"""
+        # Xサーバーとの接続・初期化。各種管理用データ構造も初期化
+        self.display = display.Display()
+        self.screen = self.display.screen()
+        self.colormap = self.screen.default_colormap
+        self.keybinds = {}
+        # --- ウィンドウ・モニタ管理用の主要変数 ---
+        self.special_window = []  # 特殊枠ウィンドウ
+        self.managed_windows = {}  # 管理対象ウィンドウ
+        self.exposed_windows = []  # 表示中ウィンドウ
+        self.coverdwindows = []    # 被覆ウィンドウ
+        self.window_vscreen = {}   # 仮想スクリーン割当
+        self.current_vscreen = 0
+        self.frame_windows = {}    # 枠ウィンドウ
+        self.framed_window = None # 枠付きウィンドウ
+        self.is_selection_mode_enabled = False
+        self.pressed_keys = set()
+        self.last_dragged_time = time.time()
+        # --- マルチモニタ・仮想スクリーン初期化 ---
+        self.monitor_geometries = self.get_available_monitor_geometries()
+        self.maxsize = self.get_screen_size()
+        # --- Xイベントのグラブ・初期ウィンドウ管理 ---
+        self.catch_events()
+        self.grab_keys()
+        self.grab_buttons()
+        self.create_frame_windows()
+        self.create_selection_window()
+        self.font = self.display.open_font(FONT)
+        self.white_gc = self.selection_window.create_gc(font=self.font, foreground=self.screen.white_pixel)
+        self.black_gc = self.selection_window.create_gc(font=self.font, foreground=self.screen.black_pixel)
+        # --- 修飾キー名の管理 ---
+        self.mod_string = [
+            'shift', 'lock', 'control', 'mod1',
+            'mod2', 'mod3', 'mod4', 'mod5']
+        self.mod_mask_string = {
+            X.ShiftMask: 'shift', X.LockMask: 'lock', X.ControlMask: 'control',
+            X.Mod1Mask: 'mod1', X.Mod2Mask: 'mod2', X.Mod3Mask: 'mod3',
+            X.Mod4Mask: 'mod4', X.Mod5Mask: 'mod5'}
+        self.modmap = {}
+        self.parse_xmodmap()
+        # --- 既存ウィンドウの管理開始 ---
+        for child in self.screen.root.query_tree().children:
+            if child.get_attributes().map_state:
+                self.manage_window(child)
+        self.sort_exposed_windows()
+        self.always_top = [None for _ in range(MAX_VSCREEN)]
+        # --- XRandRイベント監視・自動拡張デスクトップ化 ---
+        randr.select_input(self.screen.root, randr.RRScreenChangeNotifyMask)
+        self.randr_event_type = self.display.extension_event._data['ScreenChangeNotify']
+        EVENTS[self.randr_event_type] = 'handle_randr_screen_change'
+        # --- ローカルsink名を起動時に記憶 ---
+        self.local_sink_name = self.get_local_sink_name()
+        # --- 一度でも現れた外部出力名を記憶 ---
+        self.known_external_outputs = set()
+        self.update_known_external_outputs()
+
+    def update_known_external_outputs(self):
+        # xrandr出力からDP-*, HDMI-*を全て記憶
+        xrandr_out = subprocess.getoutput('xrandr')
+        for line in xrandr_out.split('\n'):
+            if any(prefix in line for prefix in ['DP-', 'HDMI-']):
+                name = line.split()[0]
+                if name != 'eDP-1':  # 内蔵は除外
+                    self.known_external_outputs.add(name)
+
+    def catch_events(self):
+        debug('function: catch_events called')
+        self.screen.root.change_attributes(
+            event_mask = X.SubstructureRedirectMask |
+            X.SubstructureNotifyMask |
+            X.EnterWindowMask |
+            X.LeaveWindowMask |
+            X.FocusChangeMask)
+
+    def grab_keys(self):
+        debug('function: grab_keys called')
+        for (key, modifier), rule in KEY_BINDS.items():
+            # Acer Aspire 1350 keys
+            # Keyf          Known X keycodes
+            # Lower volume 174
+            # Raise volume 176
+            # Audio mute   160
+            keysym = XK.string_to_keysym(key)
+            keycode = self.display.keysym_to_keycode(keysym)
+            debug(f'debug: {key} to ({keysym}, {keycode})')
+            if modifier is None:
+                continue
+            self.screen.root.grab_key(keycode, modifier, True,
+                X.GrabModeAsync, X.GrabModeAsync)
+            self.keybinds[(keycode, modifier)] = rule
+            debug(f'debug: ({key}, {modifier}) grabbed as ({keycode}, {modifier})')
+
+    def grab_buttons(self):
+        debug('function: grub_buttons called')
+        for button in [1, 3]:
+            self.screen.root.grab_button(
+                button, X.Mod1Mask, True,
+                X.ButtonPressMask, X.GrabModeAsync,
+                X.GrabModeAsync, X.NONE, X.NONE)
+
+    def create_frame_windows(self):
+        debug('function: crate_frame_windows called')
+        self.frame_pixel = self.colormap.alloc_named_color(FRAME_COLOR).pixel
+        for side in ['left', 'right', 'upper', 'lower']:
+            window = self.screen.root.create_window(
+                0,0,16,16,0,
+                self.screen.root_depth,
+                X.InputOutput,
+                background_pixel=self.frame_pixel,
+                override_redirect=True)
+            window.map()
+            self.frame_windows[side] = window
+
+
+
+    def draw_frame_windows(self):
+        #debug('function: draw_frame_windows called')
+        if self.framed_window == None:
+            return
+
+        if self.framed_window in self.special_window:
+            new_frame_pixel = self.colormap.alloc_named_color(FRAME_SPECIAL_COLOR).pixel
+            for side in ['left', 'right', 'upper', 'lower']:
+                self.frame_windows[side].change_attributes(background_pixel=new_frame_pixel)
+                self.frame_windows[side].clear_area(0, 0, 0, 0, True) 
+            else:
+            new_frame_pixel = self.colormap.alloc_named_color(FRAME_COLOR).pixel
+            for side in ['left', 'right', 'upper', 'lower']:
+                self.frame_windows[side].change_attributes(background_pixel=new_frame_pixel)
+                self.frame_windows[side].clear_area(0, 0, 0, 0, True) 
+        geom = self.get_window_geometry(self.framed_window)
+        if geom == None:
+            return
+        for side in ['left', 'right', 'upper', 'lower']:
+            x, y, width, height = 0,0,0,0
+            if side == 'left':
+                x = geom.x
+                y = geom.y
+                width = FRAME_THICKNESS
+                height = geom.height
+            elif side == 'right':
+                x = geom.x + geom.width - FRAME_THICKNESS
+                y = geom.y
+                width = FRAME_THICKNESS
+                height = geom.height
+            elif side == 'upper':
+                x = geom.x
+                y = geom.y
+                width = geom.width
+                height = FRAME_THICKNESS
+            elif side == 'lower':
+                x = geom.x
+                y = geom.y + geom.height - FRAME_THICKNESS
+                width = geom.width
+                height = FRAME_THICKNESS
+            self.frame_windows[side].configure(
+                x=x, y=y, width=width, height=height, stack_mode=X.Above)
+            self.frame_windows[side].map()
+
+    def map_frame_windows(self):
+        #debug('function: map_frame_windows called')
+        for side in ['left', 'right', 'upper', 'lower']:
+            self.frame_windows[side].map()
+
+    def unmap_frame_windows(self):
+        #debug('function: unmap_frame_windows called')
+        for side in ['left', 'right', 'upper', 'lower']:
+            self.frame_windows[side].unmap()
+
+
+    def create_selection_window(self, monitor=1):
+        """
+        ウィンドウ選択用の補助ウィンドウを作成する。
+        - 画面上に細長いバー状のウィンドウを表示し、現在管理しているウィンドウのリストや選択状態を視覚的に示す
+        - 通常はウィンドウ切り替えや選択モード時に利用される
+        - 指定したモニター上の中央付近に1/3幅で配置される
+        """
+        debug('function: crate_selection_window called')
+        monitor = list(self.monitor_geometries.values())[monitor%len(self.monitor_geometries)]
+        width = monitor['width']//3
+        height = 10
+        x = monitor['x']+monitor['width']//3
+        y = monitor['y']+monitor['height']//3
+        self.selection_window = self.screen.root.create_window(
+            x, y,
+            width, height,
+            0,
+            self.screen.root_depth,
+            X.InputOutput,
+            background_pixel=self.screen.black_pixel,
+            override_redirect=True)
+        self.selection_window.change_attributes(backing_store=X.Always)
+
+    def update_selection_window(self):
+        #debug('function: update_selection_window called')
+        geom = self.get_window_geometry(self.selection_window)
+        if geom == None:
+            return
+        self.selection_window.configure(
+            x=geom.x,
+            y=geom.y,
+            width=geom.width,
+            height=20*len(self.exposed_windows))
+        self.selection_window.clear_area(0,0,geom.width,geom.height)
+        idx = self.exposed_windows.index(self.framed_window)
+        for i in range(len(self.exposed_windows)):
+            win = self.exposed_windows[i]
+            win_name = '{}: 0x{:x}'.format(self.get_window_class(win)[:50], win.id)
+            chars = [c.encode() for c in list(win_name)]
+            self.selection_window.poly_text(self.white_gc,20,20*(i+1)-5,chars)
+        win_name = '{self.get_window_class(self.framed_window)[:50]}: 0x{:x}'\
+            .format(self.get_window_class(self.framed_window)[:50], win.id)
+        chars = [c.encode() for c in list(win_name)]
+        self.selection_window.fill_rectangle(
+            self.white_gc,0,20*idx,geom.width,20)
+        self.selection_window.poly_text(
+            self.black_gc,20,20*(idx+1)-5,chars)
+        self.selection_window.configure(stack_mode=X.Above)
+
+    def get_window_attributes(self, window):
+        #debug('function: get_window_attributes called')        
         try:
-            self.current_layout = None  # ← ここで先に初期化
-            self.display = display.Display()
-            self.screen = self.display.screen()
-            # RandR拡張を有効化
-            try:
-                self.display.xrandr_query_version()
-            except Exception as e:
-                print(f"警告: RandR拡張の初期化に失敗しました: {e}")
-            # 他のウィンドウマネージャーが実行中かチェック＆イベントマスクを一度だけまとめて設定
-            try:
-                self.screen.root.change_attributes(
-                    event_mask = X.SubstructureRedirectMask |
-                    X.SubstructureNotifyMask |
-                    X.EnterWindowMask |
-                    X.LeaveWindowMask |
-                    X.FocusChangeMask |
-                    X.ButtonPressMask |
-                    X.ButtonReleaseMask |
-                    X.PointerMotionMask |
-                    randr.RRScreenChangeNotifyMask
-                )
-            except Exception as e:
-                print("エラー: 他のウィンドウマネージャーが実行中です")
-                print("ヒント: 既存のウィンドウマネージャーを終了してから再試行してください")
-                sys.exit(1)
-            # 残りの初期化処理
-            self.colormap = self.screen.default_colormap
-            # 設定の読み込み
-            self.config = load_config()
-            # キーバインド関連
-            self.keybinds = {}
-            self.pressed_keys = set()
-            # ウィンドウ管理用の辞書とリスト
-            self.managed_windows = {}
-            self.exposed_windows = []
-            self.framed_window = None
-            # フレーム関連
-            self.frame_windows = {}
-            self.special_window = []
-            # 仮想スクリーン関連
-            self.window_vscreen = {}
-            self.current_vscreen = 0
-            # ドラッグ操作用の変数
-            self.start = None
-            self.start_geom = None
-            self.last_dragged_time = time.time()
-            # モニター情報の初期化
-            self.monitor_geometries = self.get_available_monitor_geometries()
-            self.maxsize = self.get_screen_size()
-            # フレームウィンドウの作成
-            self.create_frame_windows()
-            # イベントの捕捉を開始
-            # self.catch_events()  # 不要: 既にroot.change_attributesで設定済み
-            self.grab_buttons()
-            self.grab_keys()
-            # プリセットマネージャーの初期化
-            self.preset_manager = PresetManager(self)
-            # モニターマネージャーの初期化
-            self.monitor_manager = MonitorManager(self)
-            # 既存のウィンドウを管理対象に追加
-            for child in self.screen.root.query_tree().children:
-                try:
-                    if child.get_attributes().map_state:
-                        self.manage_window(child)
-                except Exception as e:
-                    debug(f'child manage_window error: {e}')
-            # タイル配置関連
-            self.current_main_ratio = self.config.TILE_RATIOS['main_pane_ratio']
-            self.current_tile_pattern = TILE_PATTERN_GRID
-            # ウィンドウルール関連
-            self.floating_windows = set()  # フローティングウィンドウを保持
-            # レイアウト関連
-            self.layout_windows = {}  # レイアウトに属するウィンドウを保持
-        except Exception as e:
-            print(f"初期化中にエラーが発生しました: {e}")
-            debug(f"初期化中にエラーが発生しました: {e}")
-            sys.exit(1)
+            # /usr/local/lib/python3.10/dist-packages/Xlib/xobject/drawble.py
+            # /usr/local/lib/python3.10/dist-packages/Xlib/protocol/request.py
+            return window.get_attributes()
+        except:
+            return None
+
+    def get_window_class(self, window):
+        #debug('function: get_window_class called')
+        try:
+            cmd, cls = window.get_wm_class()
+        except:
+            return ''
+        if cls is not None:
+            return cls
+        else:
+            return ''
+
+    def get_window_name(self, window):
+        debug('function: get_window_name called')
+        try:
+            return f'id->0x{window.id:x}, name->{self.get_window_class(window)}'
+        except:
+            return ''
+
+    def get_window_id(self, window):
+        #debug('function: get_window_id called')
+        try:
+            return window.id
+        except:
+            return None
+            
+
+    def manage_window(self, window):
+        debug('function: manage_window called')
+        """
+        新規ウィンドウを管理対象に追加し、必要な属性・イベントマスクを設定する。
+        - 既に管理済み・override_redirectなウィンドウは無視
+        - 管理リストや仮想スクリーン割当も更新
+        """
+        attrs = self.get_window_attributes(window)
+        if window in self.managed_windows.keys():
+            return
+        if attrs is None:
+            return
+        if attrs.override_redirect:
+            return
+        debug(f'debug: managed {self.get_window_name(window)}')
+        self.managed_windows[window] = self.get_monitor_geometry_with_window(window)
+        self.exposed_windows.append(window)
+        self.window_vscreen[window] = self.current_vscreen
+        window.map()
+        window.change_attributes(
+            event_mask=X.EnterWindowMask | X.LeaveWindowMask)
+
+    def unmanage_window(self, window):
+        debug('function: unmanage_window called')
+        if window in self.managed_windows.keys():
+            debug('unmanaged')
+            self.managed_windows.pop(window)
+        if window in self.exposed_windows:
+            self.exposed_windows.remove(window)
+        if self.always_top[self.current_vscreen] == window:
+            self.always_top[self.current_vscreen] = None
+            self.coverdwindows.clear()
+
+
+    def sort_exposed_windows(self):
+        debug('function: sort_exposed_windows called')
+        def sort_key(window):
+            geom = self.get_window_geometry(window)
+            if geom is None:
+                return 1<<31
+            else:
+                # この計算式により、ウィンドウはまずX座標に基づいて並べ替えられ、
+                # X座標が同じ場合はY座標に基づいてさらに並べ替えられる
+                return geom.x * self.maxsize['height'] + geom.y
+        self.exposed_windows = sorted(self.exposed_windows, key=sort_key)
+
+    def focus_window(self, window):
+        debug('function: focus_window called')
+        """
+        指定ウィンドウにフォーカスを当て、スタック順序・枠描画も制御する。
+        - exposed_windowsにないウィンドウは無視
+        - 枠付きウィンドウのwarp_pointerも行う
+        注意: stack_always_topやdraw_frame_windowsもここで呼ばれる
+        """
+        if window not in self.exposed_windows:
+            return
+        debug('debug: focused {}'.format(self.get_window_name(window)))
+        window.set_input_focus(X.RevertToParent, 0)
+        window.configure(stack_mode=X.Above)        
+        self.framed_window = window
+        self.stack_always_top()
+        self.draw_frame_windows()
+
+    def focus_next_window(self, window, direction=FORWARD):
+        debug('function: focus_next_window called')
+        # exposed_windowsはwindowインスタンスが格納された配列
+        if not self.exposed_windows:
+            return
+        if window in self.exposed_windows:
+            idx = self.exposed_windows.index(window)
+
+            if direction == FORWARD:
+                nextidx = (idx+1)%len(self.exposed_windows)
+                while self.exposed_windows[nextidx] in self.coverdwindows:                    
+                    nextidx = (nextidx+1)%len(self.exposed_windows)                
+                idx = nextidx
+            else:
+                nextidx = (idx-1)%len(self.exposed_windows)
+                while self.exposed_windows[nextidx] in self.coverdwindows:                    
+                    nextidx = (nextidx-1)%len(self.exposed_windows)                
+                idx = nextidx                
+            next_window = self.exposed_windows[idx]
+        else:
+            next_window = self.exposed_windows[0]
+        self.focus_window(next_window)
+        # マウスポインターを warp_pointer メソッドを使用してnext_window内の特定の位置に移動する
+        next_window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+
+    def get_window_geometry(self, window):
+        #debug('debug: get_window_geometry called')
+        try:
+            return window.get_geometry()
+        except:
+            return None
+
+    def get_monitor_coverarea(self, wgeom, mgeom):
+        xmin = min(wgeom.x, mgeom['x'])
+        xmax = max(wgeom.x + wgeom.width, mgeom['x'] + mgeom['width'])
+        xsum = wgeom.width + mgeom['width']
+        xcover = max(0, xsum - (xmax-xmin))
+        ymin = min(wgeom.y, mgeom['y'])
+        ymax = max(wgeom.y + wgeom.height, mgeom['y'] + mgeom['height'])
+        ysum = wgeom.height + mgeom['height']
+        ycover = max(0, ysum - (ymax-ymin))
+        return xcover * ycover
+
+
+    def get_monitor_geometry_with_window(self, window):
+        #debug('function: get_monitor_geometry_with_window called')
+        """
+        指定したウィンドウが「どの物理モニターに主に属しているか」を判定し、そのモニターの位置・サイズ情報（ジオメトリ）を返す。
+        - ウィンドウが複数のモニターにまたがっている場合でも、「一番多く重なっているモニター」を自動で選ぶ。
+        - 例えば「ウィンドウを次のモニターに移動」「最大化」など、ウィンドウの基準となるモニターを知りたいときに使う。
+        """
+        geom  = self.get_window_geometry(window)
+        maxcoverage = 0
+        maxmonitor = list(self.monitor_geometries.values())[0]
+        for name, monitor in self.monitor_geometries.items():
+            coverarea = self.get_monitor_coverarea(geom, monitor)
+            coverage = coverarea / (monitor['width']*monitor['height'])
+            normcoverage = coverarea * coverage
+            if maxcoverage < normcoverage:
+                maxcoverage = normcoverage
+                maxmonitor = monitor
+        return maxmonitor
+
+    def toggle_xpymon_and_adjust_windows(self, event):
+        """
+        xpymonの起動/終了に応じて、全ウィンドウとモニタのサイズ・位置を調整する。
+        - xpymonが起動していれば終了し、全ウィンドウを拡大
+        - xpymonが停止していれば起動し、全ウィンドウを縮小
+        注意: モニタのy座標・高さを8px単位で調整
+        """
+        if os.system(f'pkill xpymon')==0:
+            for monitor in self.monitor_geometries.values():
+                monitor['height'] += 8
+                monitor['y'] -= 8
+            for window in self.managed_windows:                
+                geom = self.get_window_geometry(window)
+                x = geom.x
+                y = geom.y - 8
+                width = geom.width
+                height = geom.height + 8
+                window.configure(
+                    x=x,
+                    y=y,
+                    width=width,
+                    height=height)
+            self.draw_frame_windows()
+        else:
+            os.system(f'xpymon &')
+            for monitor in self.monitor_geometries.values():
+                monitor['height'] -= 8
+                monitor['y'] += 8
+            for window in self.managed_windows:                
+                geom = self.get_window_geometry(window)
+                x = geom.x
+                y = geom.y + 8
+                width = geom.width
+                height = geom.height - 8
+                window.configure(
+                    x=x,
+                    y=y,
+                    width=width,
+                    height=height)
+            self.draw_frame_windows()
 
     def get_screen_size(self):
-        """スクリーン全体のサイズを取得"""
         lines = subprocess.getoutput('xrandr').split('\n')
         match = re.search(r'current (\d+) x (\d+)', lines[0])
         return {
-            'width': int(match.group(1)),
-            'height': int(match.group(2))
+            'width' : int(match.group(1)),
+            'height' : int(match.group(2)),
         }
 
     def get_available_monitor_geometries(self):
-        """利用可能なモニターの情報を取得"""
         debug('function: get_available_monitor_geometries called')
+        # ディスプレイに接続されたモニターの位置やサイズを取得するためのメソッド
         monitors = self.get_monitors_info()
         geometries = {}
         for name, monitor in monitors.items():
@@ -398,24 +657,27 @@ class Mosakuwm:
                 if not geom:
                     debug(f'Monitor {name} is connected but not mapped.')
                     continue
+                width, height, x, y = geom['width'], geom['height'], geom['x'], geom['y']
                 geometries[name] = {
                     'name': name,
-                    'width': geom['width'],
-                    'height': geom['height'],
-                    'x': geom['x'],
-                    'y': geom['y']
+                    'width': width,
+                    'height': height,
+                    'x': x,
+                    'y': y,
                 }
         return geometries
 
     def get_monitors_info(self):
-        """xrandrを使用して接続されているモニターの情報を取得"""
         debug('function: get_monitors_info called')
         lines = subprocess.getoutput('xrandr').split('\n')
         monitors = {}
         for line in lines[1:]:
             if 'connected' in line:
                 name = line.split()[0]
-                connected = ' connected' in line
+                if ' connected' in line:
+                    connected = True
+                else:
+                    connected = False
                 try:
                     m = re.search(r'(\d+)x(\d+)\+(\d+)\+(\d+)', line)
                     width = int(m.group(1))
@@ -426,827 +688,81 @@ class Mosakuwm:
                         'width': width,
                         'height': height,
                         'x': x,
-                        'y': y
+                        'y': y,
                     }
                 except:
                     geom = None
-                primary = 'primary' in line
+                if 'primary' in line:
+                    primary = True
+                else:
+                    primary = False
                 monitors[name] = {
                     'connected': connected,
                     'geometry': geom,
-                    'primary': primary
+                    'primary': primary,
                 }
         return monitors
 
-    def get_monitor_coverarea(self, wgeom, mgeom):
-        """ウィンドウとモニターの重なり面積を計算"""
-        xmin = min(wgeom.x, mgeom['x'])
-        xmax = max(wgeom.x + wgeom.width, mgeom['x'] + mgeom['width'])
-        xsum = wgeom.width + mgeom['width']
-        xcover = max(0, xsum - (xmax - xmin))
-        
-        ymin = min(wgeom.y, mgeom['y'])
-        ymax = max(wgeom.y + wgeom.height, mgeom['y'] + mgeom['height'])
-        ysum = wgeom.height + mgeom['height']
-        ycover = max(0, ysum - (ymax - ymin))
-        
-        return xcover * ycover
-
-    def get_monitor_geometry_with_window(self, window):
-        """ウィンドウが最も重なっているモニターのジオメトリを取得"""
-        geom = self.get_window_geometry(window)
-        if not geom:
-            return list(self.monitor_geometries.values())[0]
-
-        maxcoverage = 0
-        maxmonitor = list(self.monitor_geometries.values())[0]
-        
-        for name, monitor in self.monitor_geometries.items():
-            coverarea = self.get_monitor_coverarea(geom, monitor)
-            coverage = coverarea / (monitor['width'] * monitor['height'])
-            normcoverage = coverarea * coverage
-            if maxcoverage < normcoverage:
-                maxcoverage = normcoverage
-                maxmonitor = monitor
-        
-        return maxmonitor
-
-    def move_window_to_monitor(self, window, dst):
-        """ウィンドウを指定したモニターに移動"""
-        if window not in self.managed_windows.keys():
-            return
-            
-        src = self.managed_windows.get(window, None)
-        if src is None:
-            return
-            
-        wgeom = self.get_window_geometry(window)
-        if wgeom is None:
-            return
-            
-        # 移動先モニターのサイズに合わせてウィンドウをスケーリング
-        hratio = dst['width'] / src['width']
-        vratio = dst['height'] / src['height']
-        
-        xd = wgeom.x - src['x']
-        yd = wgeom.y - src['y']
-        
-        x = int(xd * hratio) + dst['x']
-        y = int(yd * vratio) + dst['y']
-        width = int(wgeom.width * hratio)
-        height = int(wgeom.height * vratio)
-        
-        window.configure(
-            x=x,
-            y=y,
-            width=width,
-            height=height
-        )
-        self.managed_windows[window] = dst
-        self.draw_frame_windows()
-
-    def move_window_to_next_monitor(self, window):
-        """ウィンドウを次のモニターに移動"""
-        if window not in self.exposed_windows:
-            return
-            
-        src = self.managed_windows.get(window, None)
-        if src is None:
-            return
-            
-        monitors = list(self.monitor_geometries.values())
-        srcidx = monitors.index(src)
-        dstidx = (srcidx + 1) % len(monitors)
-        dst = monitors[dstidx]
-        
-        self.move_window_to_monitor(window, dst)
-
-    def catch_events(self):
-        """ルートウィンドウのイベントをキャッチするための設定"""
-        self.screen.root.change_attributes(
-            event_mask = X.SubstructureRedirectMask |
-            X.SubstructureNotifyMask |
-            X.EnterWindowMask |
-            X.LeaveWindowMask |
-            X.FocusChangeMask |
-            X.ButtonPressMask |
-            X.ButtonReleaseMask |
-            X.PointerMotionMask |
-            randr.RRScreenChangeNotifyMask  # 既に修正済み
-        )
-
-    def grab_buttons(self):
-        """マウスボタンのグラブ設定"""
-        debug('function: grab_buttons called')
-        for button in [1, 3]:
-            try:
-                self.screen.root.grab_button(
-                    button,
-                    X.Mod1Mask,
-                    True,
-                    X.ButtonPressMask |
-                    X.ButtonReleaseMask |
-                    X.PointerMotionMask,
-                    X.GrabModeAsync,
-                    X.GrabModeAsync,
-                    X.NONE,
-                    X.NONE)
-            except Exception as e:
-                debug(f'grab_button failed: {e}')
-
-    def grab_keys(self):
-        """キーバインドの設定"""
-        debug('function: grab_keys called')
-        for (key, modifier), rule in self.config.KEY_BINDS.items():
-            keysym = XK.string_to_keysym(key)
-            keycode = self.display.keysym_to_keycode(keysym)
-            if modifier is None:
-                continue
-            try:
-                self.screen.root.grab_key(
-                    keycode,
-                    modifier,
-                    True,
-                    X.GrabModeAsync,
-                    X.GrabModeAsync
-                )
-                self.keybinds[(keycode, modifier)] = rule
-                debug(f'debug: ({key}, {modifier}) grabbed as ({keycode}, {modifier})')
-            except Exception as e:
-                debug(f'grab_key failed: {e}')
-
-    def handle_button_press(self, event):
-        """マウスボタンが押された時の処理"""
-        debug('handler: handle_button_press called')
-        window = event.child
-        if window in self.frame_windows.values():
-            return  # フレーム自体は無視
-        if window not in self.managed_windows.keys():
-            return
-        self.screen.root.grab_pointer(
-            True,
-            X.PointerMotionMask |
-            X.ButtonReleaseMask,
-            X.GrabModeAsync,
-            X.GrabModeAsync,
-            X.NONE,
-            X.NONE,
-            0)
-        self.focus_window(window)
-        self.start = event
-        self.start_geom = self.get_window_geometry(window)
-
-    def handle_button_release(self, event):
-        """マウスボタンが離された時の処理"""
-        debug('handler: handle_button_release called')
-        self.display.ungrab_pointer(0)
-        if event.child in self.managed_windows:
-            # ウィンドウの所属モニターを更新
-            self.managed_windows[event.child] = self.get_monitor_geometry_with_window(event.child)
-
-    def handle_motion_notify(self, event):
-        """マウスポインタが移動した時の処理"""
-        debug('handler: handle_motion_notify called')
-        if self.start is None or self.start.child == X.NONE:
-            return
-        now = time.time()
-        if now - self.last_dragged_time < self.config.DRAG_INTERVAL:
-            return
-        self.last_dragged_time = now
-        xdiff = event.root_x - self.start.root_x
-        ydiff = event.root_y - self.start.root_y
-        if event.child in self.frame_windows.values():
-            return  # フレーム自体は無視
-        if self.start.detail == 1:
-            self.start.child.configure(
-                x=self.start_geom.x + xdiff,
-                y=self.start_geom.y + ydiff
-            )
-        elif self.start.detail == 3:
-            new_width = self.start_geom.width + xdiff
-            new_height = self.start_geom.height + ydiff
-            if new_width <= self.config.WINDOW_MIN_WIDTH or new_height <= self.config.WINDOW_MIN_HEIGHT:
-                return
-            self.start.child.configure(
-                width=new_width,
-                height=new_height
-            )
-        self.draw_frame_windows()
-
-    def manage_window(self, window):
-        attrs = self.get_window_attributes(window)
-        if window in self.managed_windows.keys():
-            return
-        if attrs is None:
-            return
-        if attrs.override_redirect:
-            return
-        geom = self.get_window_geometry(window)
-        if not geom:
-            return
-        # フレーム化・reparentをやめる
-        self.managed_windows[window] = self.get_monitor_geometry_with_window(window)
-        # 仮想スクリーン割り当て
-        self.window_vscreen[window] = self.current_vscreen
-        # 表示更新
-        self.update_visible_windows()
-        self.apply_window_rules(window)
-        self.apply_layout(window)
-        window.change_attributes(
-            event_mask=X.EnterWindowMask | X.LeaveWindowMask
-        )
-        window.configure(stack_mode=X.Above)
-        self.draw_frame_windows()
-
-    def get_window_attributes(self, window):
-        """ウィンドウの属性を取得"""
-        try:
-            return window.get_attributes()
-        except:
-            return None
-
-    def get_window_geometry(self, window):
-        """ウィンドウのジオメトリを取得"""
-        try:
-            return window.get_geometry()
-        except:
-            return None
-
-    def handle_key_press(self, event):
-        """キーが押された時の処理"""
-        debug('handler: handle_key_press called')
-        keycode = event.detail
-        modifier = event.state
-        entry = (keycode, modifier)
-        
-        rule = self.keybinds.get(entry, None)
-        if rule:
-            if 'method' in rule:
-                method = getattr(self, rule['method'], None)
-                if method:
-                    arg = rule.get('arg', None)
-                    if arg is not None:
-                        method(event, arg)
-                    else:
-                        method(event)
-            elif 'command' in rule:
-                os.system(rule['command'])
-
-    def cb_focus_next_window(self, event, direction=FORWARD):
-        """次のウィンドウにフォーカスを移動"""
-        debug('callback: cb_focus_next_window called')
-        if not self.exposed_windows:
-            return
-            
-        if self.framed_window in self.exposed_windows:
-            idx = self.exposed_windows.index(self.framed_window)
-            if direction == FORWARD:
-                idx = (idx + 1) % len(self.exposed_windows)
-            else:
-                idx = (idx - 1) % len(self.exposed_windows)
-        else:
-            idx = 0
-            
-        next_window = self.exposed_windows[idx]
-        self.focus_window(next_window)
-        next_window.warp_pointer(self.config.INIT_PTR_POS, self.config.INIT_PTR_POS)
-
-    def focus_window(self, window):
-        """指定したウィンドウにフォーカスを設定"""
-        debug('function: focus_window called')
-        if window not in self.exposed_windows:
-            return
-        try:
-            attrs = window.get_attributes()
-            if attrs and attrs.map_state:
-                window.set_input_focus(X.RevertToParent, 0)
-        except Exception as e:
-            debug(f'focus_window error: {e}')
-        window.configure(stack_mode=X.Above)
-        self.framed_window = window
-        self.draw_frame_windows()
-
-    def cb_halve_window(self, event, direction):
-        """ウィンドウを半分のサイズに変更"""
-        debug('callback: cb_halve_window called')
-        if not self.framed_window:
-            return
-            
-        self.halve_window(self.framed_window, direction)
-        self.framed_window.warp_pointer(self.config.INIT_PTR_POS, self.config.INIT_PTR_POS)
-
-    def halve_window(self, window, direction):
-        """ウィンドウを指定した方向に半分のサイズにする"""
-        if window not in self.exposed_windows:
-            return
-            
-        geom = self.get_window_geometry(window)
-        if not geom:
-            return
-            
-        if direction & (LEFT | RIGHT) != 0 and geom.width <= self.config.WINDOW_MIN_WIDTH:
-            return
-        if direction & (UPPER | LOWER) != 0 and geom.height <= self.config.WINDOW_MIN_HEIGHT:
-            return
-            
-        x, y = geom.x, geom.y
-        width, height = geom.width, geom.height
-        
-        if direction & (LEFT | RIGHT) != 0:
-            width //= 2
-        if direction & (UPPER | LOWER) != 0:
-            height //= 2
-            
-        if direction & RIGHT != 0:
-            x += width
-        if direction & LOWER != 0:
-            y += height
-            
-        window.configure(
-            x=x,
-            y=y,
-            width=width,
-            height=height
-        )
-        self.draw_frame_windows()
-
-    def cb_move_window_to_next_monitor(self, event):
-        """ウィンドウを次のモニターに移動"""
-        debug('callback: cb_move_window_to_next_monitor called')
-        if not self.framed_window:
-            return
-            
-        self.move_window_to_next_monitor(self.framed_window)
-        self.framed_window.warp_pointer(self.config.INIT_PTR_POS, self.config.INIT_PTR_POS)
-
-    def loop(self):
-        """メインイベントループ"""
-        while True:
-            try:
-                event = self.display.next_event()
-                debug(f"event received: {event.type}")
-                if event.type == X.MapRequest:
-                    self.handle_map_request(event)
-                elif event.type == X.DestroyNotify:
-                    self.handle_destroy_notify(event)
-                elif event.type == X.ButtonPress:
-                    self.handle_button_press(event)
-                elif event.type == X.ButtonRelease:
-                    self.handle_button_release(event)
-                elif event.type == X.MotionNotify:
-                    self.handle_motion_notify(event)
-                elif event.type == X.KeyPress:
-                    self.handle_key_press(event)
-                try:
-                    if hasattr(self.display.extension_event, 'RRScreenChangeNotify') and \
-                       event.type == self.display.extension_event.RRScreenChangeNotify:
-                        self.handle_randr_notify(event)
-                except AttributeError:
-                    pass
-            except Exception as e:
-                debug(f'event loop error: {e}')
-
-    def handle_map_request(self, event):
-        """新しいウィンドウが作成された時のハンドラ"""
-        debug('handler: handle_map_request called')
-        self.manage_window(event.window)
-
-    def handle_destroy_notify(self, event):
-        """ウィンドウが破棄された時のハンドラ"""
-        debug('handler: handle_destroy_notify called')
-        if event.window in self.managed_windows:
-            self.managed_windows.pop(event.window)
-            if event.window in self.exposed_windows:
-                self.exposed_windows.remove(event.window)
-            if event.window in self.window_vscreen:
-                self.window_vscreen.pop(event.window)
-            if event.window == self.framed_window:
-                self.framed_window = None
-                self.unmap_frame_windows()
-
-    def select_vscreen(self, num):
-        """指定した仮想スクリーンに切り替え"""
-        debug('function: select_vscreen called')
-        if num < 0 or num >= self.config.MAX_VSCREEN:
-            return
-        self.current_vscreen = num
-        self.update_visible_windows()
-
-    def send_window_to_next_vscreen(self, window, direction):
-        """ウィンドウを次または前の仮想スクリーンに移動し、作業場所も追従"""
-        debug('function: send_window_to_next_vscreen called')
-        if window not in self.managed_windows:
-            return
-        cur = self.window_vscreen.get(window, 0)
-        if direction == 0:  # FORWARD
-            next_v = (cur + 1) % self.config.MAX_VSCREEN
-        else:  # BACKWARD
-            next_v = (cur - 1) % self.config.MAX_VSCREEN
-        self.window_vscreen[window] = next_v
-        # ここで作業場所もウィンドウの移動先に合わせて切り替える
-        self.current_vscreen = next_v
-        self.update_visible_windows()
-
-    def create_frame_windows(self):
-        """フレームウィンドウの作成"""
-        debug('function: create_frame_windows called')
-        self.frame_pixel = self.colormap.alloc_named_color(self.config.FRAME_COLOR).pixel
-        for side in ['left', 'right', 'upper', 'lower']:
-            # サイズ・位置は後でdraw_frame_windowsで調整するので仮でOK
-            window = self.screen.root.create_window(
-                0, 0, self.config.FRAME_THICKNESS if side in ['left', 'right'] else 16,
-                self.config.FRAME_THICKNESS if side in ['upper', 'lower'] else 16,
-                0,
-                self.screen.root_depth,
-                X.InputOutput,
-                background_pixel=self.frame_pixel,
-                override_redirect=True
-            )
-            window.map()
-            self.frame_windows[side] = window
-
-    def draw_frame_windows(self):
-        """フレームウィンドウの描画"""
-        if self.framed_window is None:
-            return
-        # フレームの色を設定
-        if self.framed_window in self.special_window:
-            new_frame_pixel = self.colormap.alloc_named_color(self.config.FRAME_SPECIAL_COLOR).pixel
-        else:
-            new_frame_pixel = self.colormap.alloc_named_color(self.config.FRAME_COLOR).pixel
-        for side in ['left', 'right', 'upper', 'lower']:
-            self.frame_windows[side].change_attributes(background_pixel=new_frame_pixel)
-            self.frame_windows[side].clear_area(0, 0, 0, 0, True)
-        geom = self.get_window_geometry(self.framed_window)
-        if geom is None:
-            return
-        for side in ['left', 'right', 'upper', 'lower']:
-            x, y, width, height = 0, 0, 0, 0
-            if side == 'left':
-                x = geom.x
-                y = geom.y
-                width = self.config.FRAME_THICKNESS
-                height = geom.height
-            elif side == 'right':
-                x = geom.x + geom.width - self.config.FRAME_THICKNESS
-                y = geom.y
-                width = self.config.FRAME_THICKNESS
-                height = geom.height
-            elif side == 'upper':
-                x = geom.x
-                y = geom.y
-                width = geom.width
-                height = self.config.FRAME_THICKNESS
-            elif side == 'lower':
-                x = geom.x
-                y = geom.y + geom.height - self.config.FRAME_THICKNESS
-                width = geom.width
-                height = self.config.FRAME_THICKNESS
-            self.frame_windows[side].configure(
-                x=x,
-                y=y,
-                width=width,
-                height=height,
-                stack_mode=X.Above
-            )
-            self.frame_windows[side].map()
-
-    def map_frame_windows(self):
-        """フレームウィンドウを表示"""
-        for side in ['left', 'right', 'upper', 'lower']:
-            self.frame_windows[side].map()
-
-    def unmap_frame_windows(self):
-        """フレームウィンドウを非表示"""
-        for side in ['left', 'right', 'upper', 'lower']:
-            self.frame_windows[side].unmap()
-
-    def get_tile_layout(self, tile_num):
-        """タイル配置のレイアウトを計算"""
-        debug('function: get_tile_layout called')
-        tmp = int(math.sqrt(tile_num))
-        # (row, col)を返す
-        if tmp**2 == tile_num:
-            return (tmp, tmp)
-        if (tmp+1)*tmp >= tile_num:
-            return (tmp, tmp+1)
-        return (tmp+1, tmp+1)
-
-    def set_window_to_stack_top(self, window):
-        """ウィンドウをexposed_windowsの先頭に移動し、X上でも最前面に"""
-        if window not in self.exposed_windows:
-            return
-        idx = self.exposed_windows.index(window)
-        self.exposed_windows.pop(idx)
-        self.exposed_windows.insert(0, window)
-        window.configure(stack_mode=X.Above)
-
-    def tile_windows(self, window, pattern=None):
-        debug(f'function: tile_windows called (pattern={pattern})')
-        monitor = self.managed_windows.get(window, None)
-        if monitor is None:
-            return
-        target_windows = []
-        for win in self.exposed_windows:
-            if monitor == self.managed_windows.get(win, None):
-                target_windows.append(win)
-        def sort_key(window):
-            return window.id
-        target_windows.sort(key=sort_key)
-        # patternによる分岐（今は未実装だが将来の拡張用）
-        nrows, ncols = self.get_tile_layout(len(target_windows))
-        offcuts_num = nrows*ncols - len(target_windows)
-        eidx = None
-        for i in range(len(target_windows)):
-            if self.config.PRIORITY_WINDOW in self.get_window_class(target_windows[i]).lower():
-                eidx = i
-        if eidx is not None:
-            target_windows[eidx], target_windows[ncols*(nrows-1)-1] = \
-                target_windows[ncols*(nrows-1)-1], target_windows[eidx]
-        for row in reversed(range(nrows)):
-            for col in reversed(range(ncols)):
-                if not target_windows:
-                    break
-                win = target_windows.pop(0)
-                x = monitor['x'] + monitor['width']*col//ncols
-                width = monitor['width']//ncols
-                if row == 1 and col < offcuts_num:
-                    height = monitor['height']*2//nrows
-                    y = 0 + monitor['y']
+    def remap_monitors(self, remap):
+        debug('function: remap_monitors called')
+        monitors = self.get_monitors_info()
+        leftmost = True
+        for name, monitor in monitors.items():
+            if monitor['connected']:
+                if leftmost:
+                    leftmost = False
+                    os.system(f'xrandr --output {name} --auto')
                 else:
-                    height = monitor['height']//nrows
-                    y = monitor['y'] + monitor['height']*row//nrows
-                win.configure(x=x, y=y, width=width, height=height)
-        window.warp_pointer(self.config.INIT_PTR_POS, self.config.INIT_PTR_POS)
-        self.set_window_to_stack_top(window)
-
-    def cb_tile_windows(self, event, pattern=None, *args, **kwargs):
-        """タイル配置のコールバック"""
-        debug(f'callback: cb_tile_windows called (pattern={pattern})')
-        if not self.framed_window:
-            return
-        self.tile_windows(self.framed_window, pattern)
-        self.focus_window(self.framed_window)
-
-    def get_window_class(self, window):
-        """ウィンドウのクラス名を取得"""
-        try:
-            cmd, cls = window.get_wm_class()
-            return cls if cls is not None else ''
-        except:
-            return ''
-
-    def cb_adjust_main_ratio(self, event, delta):
-        """メインペインの比率を調整"""
-        debug('callback: cb_adjust_main_ratio called')
-        new_ratio = self.current_main_ratio + delta
-        if 0.1 <= new_ratio <= 0.9:  # 比率の範囲を制限
-            self.current_main_ratio = new_ratio
-            if self.framed_window:
-                self.tile_windows(self.framed_window)
-
-    def cb_reset_main_ratio(self, event):
-        """メインペインの比率をリセット"""
-        debug('callback: cb_reset_main_ratio called')
-        self.current_main_ratio = self.config.TILE_RATIOS['main_pane_ratio']
-        if self.framed_window:
-            self.tile_windows(self.framed_window)
-
-    def reload_config(self):
-        """設定を再読み込み"""
-        debug('function: reload_config called')
-        old_config = self.config
-        self.config = load_config()
-
-        # キーバインドの再設定
-        self.ungrab_keys()
-        self.grab_keys()
-
-        # フレームの再設定
-        if (self.config.FRAME_COLOR != old_config.FRAME_COLOR or
-            self.config.FRAME_SPECIAL_COLOR != old_config.FRAME_SPECIAL_COLOR or
-            self.config.FRAME_THICKNESS != old_config.FRAME_THICKNESS):
-            self.recreate_frame_windows()
-
-        # タイル配置の更新
-        if self.framed_window:
-            self.tile_windows(self.framed_window)
-
-    def ungrab_keys(self):
-        """キーバインドを解除"""
-        debug('function: ungrab_keys called')
-        for keycode, modifier in self.keybinds.keys():
-            self.screen.root.ungrab_key(keycode, modifier)
-        self.keybinds.clear()
-
-    def recreate_frame_windows(self):
-        """フレームウィンドウを再作成"""
-        debug('function: recreate_frame_windows called')
-        # 既存のフレームを削除
-        for window in self.frame_windows.values():
-            window.destroy()
-        self.frame_windows.clear()
-        
-        # フレームを再作成
-        self.create_frame_windows()
-
-    def cb_reload_config(self, event):
-        """設定再読み込みのコールバック"""
-        debug('callback: cb_reload_config called')
-        self.reload_config()
-
-    def apply_window_rules(self, window):
-        """ウィンドウルールを適用"""
-        debug('function: apply_window_rules called')
-        window_class = self.get_window_class(window)
-        if not window_class:
-            return
-
-        # ウィンドウルールの取得
-        rule = self.config.WINDOW_RULES.get(window_class.lower(), {})
-        
-        # 特別な色の設定
-        if rule.get('special_color', False):
-            self.special_window.append(window)
-        
-        # フローティングの設定
-        if rule.get('floating', False):
-            self.floating_windows.add(window)
-        
-        # 仮想スクリーンの設定
-        if 'vscreen' in rule:
-            self.window_vscreen[window] = rule['vscreen']
-            if rule['vscreen'] != self.current_vscreen:
-                window.unmap()
+                    os.system(f'xrandr --output {name} --auto --right-of {rightnext}')
+                rightnext = name
             else:
-                window.map()
-        
-        # モニターの設定
-        if 'monitor' in rule:
-            monitor_idx = rule['monitor']
-            monitors = list(self.monitor_geometries.values())
-            if 0 <= monitor_idx < len(monitors):
-                self.managed_windows[window] = monitors[monitor_idx]
-        
-        # 位置の設定
-        if 'position' in rule:
-            self.apply_window_position(window, rule['position'])
+                os.system(f'xrandr --output {name} --off')
 
-    def apply_window_position(self, window, position_name):
-        """ウィンドウの位置を設定"""
-        debug('function: apply_window_position called')
-        monitor = self.managed_windows.get(window, None)
-        if not monitor or position_name not in self.config.WINDOW_POSITIONS:
+    def reconfigure_monitors(self, remap):
+        debug('function: reconfigure_monitors called')
+        if remap:
+            self.remap_monitors(remap)
+        updated_geometries = self.get_available_monitor_geometries()
+        if len(updated_geometries) == 0:
+            debug('no monitor is connected')
             return
+        basemonitor = list(updated_geometries.values())[0]
+        for window in self.managed_windows.keys():
+            src = self.managed_windows.get(window, None)
+            if src is None:
+                debug('source window is None')
+                continue
+            dst = updated_geometries.get(src['name'], None)
+            if dst is None:
+                self.move_window_to_monitor(window, basemonitor)
+            else:
+                self.move_window_to_monitor(window, dst)
+        self.monitor_geometries = updated_geometries
 
-        geom = self.get_window_geometry(window)
-        if not geom:
-            return
+        # monitor再構成後、全ウィンドウのmonitor割当を再計算
+        # for window in self.managed_windows.keys():
+        #     self.managed_windows[window] = self.get_monitor_geometry_with_window(window)
 
-        position = self.config.WINDOW_POSITIONS[position_name]
-        x = position['x']
-        y = position['y']
-
-        # パーセンテージ指定の場合は計算
-        if isinstance(x, str) and x.endswith('%'):
-            x = monitor['x'] + (monitor['width'] - geom.width) * int(x[:-1]) // 100
-        else:
-            x = monitor['x'] + (x if x >= 0 else monitor['width'] - geom.width + x)
-
-        if isinstance(y, str) and y.endswith('%'):
-            y = monitor['y'] + (monitor['height'] - geom.height) * int(y[:-1]) // 100
-        else:
-            y = monitor['y'] + (y if y >= 0 else monitor['height'] - geom.height + y)
-
-        window.configure(
-            x=x,
-            y=y
-        )
-
-    def get_primary_monitor(self):
-        """プライマリモニターを取得"""
-        for monitor in self.monitor_geometries.values():
-            if monitor.get('primary', False):
-                return monitor
-        return list(self.monitor_geometries.values())[0] if self.monitor_geometries else None
-
-    def get_command_for_class(self, window_class):
-        """ウィンドウクラスに対応するコマンドを取得"""
-        class_to_command = {
-            'urxvt': self.config.TERMINAL,
-            'emacs': self.config.EDITOR,
-            'google-chrome': self.config.BROWSER
-        }
-        return class_to_command.get(window_class)
-
-    def calculate_window_geometry(self, window_config, monitor):
-        """ウィンドウの位置とサイズを計算"""
-        position = window_config['position']
-        ratio = window_config.get('ratio', 1.0)
-        split = window_config.get('split', 'horizontal')
-
-        # 基本サイズの計算
-        if split == 'vertical':
-            width = int(monitor['width'] * ratio)
-            height = monitor['height']
-        else:
-            width = monitor['width']
-            height = int(monitor['height'] * ratio)
-
-        # 位置の計算
-        if position == 'left':
-            x = monitor['x']
-            y = monitor['y']
-        elif position == 'right':
-            x = monitor['x'] + monitor['width'] - width
-            y = monitor['y']
-        elif position == 'top':
-            x = monitor['x']
-            y = monitor['y']
-        elif position == 'bottom':
-            x = monitor['x']
-            y = monitor['y'] + monitor['height'] - height
-        elif position == 'top_left':
-            x = monitor['x']
-            y = monitor['y']
-        elif position == 'top_right':
-            x = monitor['x'] + monitor['width'] - width
-            y = monitor['y']
-        elif position == 'bottom_left':
-            x = monitor['x']
-            y = monitor['y'] + monitor['height'] - height
-        elif position == 'bottom_right':
-            x = monitor['x'] + monitor['width'] - width
-            y = monitor['y'] + monitor['height'] - height
-        else:  # center
-            x = monitor['x'] + (monitor['width'] - width) // 2
-            y = monitor['y'] + (monitor['height'] - height) // 2
-
-        return x, y, width, height
-
-    def ensure_config_dir(self):
-        """設定ディレクトリの存在を確認し、必要に応じて作成"""
-        config_dir = Path.home() / '.config' / 'mosakuwm'
-        if not config_dir.exists():
-            config_dir.mkdir(parents=True)
-        return config_dir
-
-    def handle_randr_notify(self, event):
-        """RandRイベントのハンドラ（モニター接続状態の変更）"""
-        debug('handler: handle_randr_notify called')
-        self.monitor_manager.update_monitors()
-
-    def apply_layout(self, window):
-        """ウィンドウにレイアウトを適用"""
-        debug('function: apply_layout called')
-        
-        # 現在のレイアウトが設定されていない場合は何もしない
-        if not self.current_layout:
-            return
-            
-        # レイアウトプリセットを取得
-        preset = self.config.LAYOUT_PRESETS.get(self.current_layout)
-        if not preset:
-            return
-            
-        # ウィンドウのクラスを取得
-        window_class = self.get_window_class(window)
-        if not window_class:
-            return
-            
-        # プリセット内のウィンドウ設定を検索
-        window_config = None
-        for config in preset['windows']:
-            if config['class'] == window_class:
-                window_config = config
-                break
-                
-        if not window_config:
-            return
-            
-        # モニター情報を取得
-        monitor = self.get_primary_monitor()
-        if not monitor:
-            return
-            
-        # ウィンドウの位置とサイズを計算
-        x, y, width, height = self.calculate_window_geometry(window_config, monitor)
-        
-        # ウィンドウを設定された位置に移動
-        window.configure(
-            x=x,
-            y=y,
-            width=width,
-            height=height
-        )
-        
-        # レイアウト管理用の辞書に追加
-        self.layout_windows[window] = window_config
-        self.draw_frame_windows()
+    def parse_xmodmap(self):
+        debug('function: parse_xmodmap called')
+        out = subprocess.getoutput('xmodmap')
+        for modifier in self.mod_string:
+            self.modmap[modifier] = []
+            match = re.search(r'{} +(.+\(0x[0-9a-f]+\)(,  )?)+'.format(modifier), out)
+            if match == None:
+                continue
+            keys = re.findall(r'([^?!,.]+ \(0x[0-9a-f]+\))', match.group(1))
+            for k in keys:
+                m = re.search(r'0x([0-9a-f]+)', k)
+                value = int(m.group(0), 16)
+                self.modmap[modifier].append(value)
 
     def maximize_window(self, window, mask):
+        #debug('function: maximize_window called')
         if window not in self.exposed_windows:
+            debug('debug: at maximize_window window is not in exposed_windows')
             return
+        # managed_windows は辞書
         monitor = self.managed_windows.get(window, None)
         if monitor is None:
             return
@@ -1267,37 +783,718 @@ class Mosakuwm:
             width=width,
             height=height)
 
-    def cb_maximize_window(self, event, mask=HORIZONTAL|VERTICAL):
-        debug('callback: cb_maximize_window called')
-        window = self.framed_window
-        if window:
-            self.maximize_window(window, mask)
-            window.warp_pointer(self.config.INIT_PTR_POS, self.config.INIT_PTR_POS)
-            self.draw_frame_windows()
+    def halve_window(self, window, args):
+        #debug('function: halve_window called')
+        if window not in self.exposed_windows:
+            return
+        geom = self.get_window_geometry(window)
+        if geom is None:
+            return
+        if args & (LEFT | RIGHT) != 0:
+           if geom.width <= WINDOW_MIN_WIDTH:
+               return
+        if args & (UPPER | LOWER) != 0:
+            if geom.height <= WINDOW_MIN_HEIGHT:
+               return
+        x, y, width, height = geom.x, geom.y, geom.width, geom.height
+        px, py = 0, 0
+        if args & (LEFT | RIGHT) != 0:
+            width //= 2
+        if args & (UPPER | LOWER) != 0:
+            height //= 2
+        if args & RIGHT != 0:
+            x += width
+            # px += width
+        if args & LOWER != 0:
+            y += height
+            # py += height
+        window.configure(
+            x=x,
+            y=y,
+            width=width,
+            height=height)
+        self.managed_windows[window] = self.get_monitor_geometry_with_window(window)
 
-    def update_visible_windows(self):
-        """現在の仮想スクリーンに属するウィンドウだけmap/unmap"""
+    def move_window_to_monitor(self, window, dst):
+        #debug('function: move_window_to_monitor called')
+        # dst must be a geometry.
+        if window not in self.managed_windows.keys():
+            return
+        src = self.managed_windows.get(window, None)
+        if src is None:
+            return
+        wgeom = self.get_window_geometry(window)
+        if wgeom is None:
+            return
+        hratio = dst['width']/src['width']
+        vratio = dst['height']/src['height']
+        x,y,width,height = wgeom.x, wgeom.y, wgeom.width, wgeom.height
+        xd = x - src['x']
+        yd = y - src['y']
+        x = int(xd * hratio) + dst['x']
+        y = int(yd * vratio) + dst['y']
+        width = int(width * hratio)
+        height = int(height * vratio)
+        window.configure(
+            x=x,
+            y=y,
+            width=width,
+            height=height)
+        self.managed_windows[window] = dst
+
+    def move_window_to_next_monitor(self, window):
+        #debug('function: move_window_to_next_monitor called')
+        if window not in self.exposed_windows:
+            return
+        geom = self.get_window_geometry(window)
+        if geom is None:
+            return
+        # src = self.get_monitor_geometry_with_window(window)
+        src = self.managed_windows.get(window, None)
+        if src is None:
+            return
+        srcidx = list(self.monitor_geometries.values()).index(src)
+        dstidx = (srcidx+1)%len(self.monitor_geometries)
+        dst = list(self.monitor_geometries.values())[dstidx]
+        self.move_window_to_monitor(window, dst)
+
+      
+
+    def destroy_window(self, window):
+        debug('function: destroy_window called')
+        if window not in self.managed_windows.keys():
+            return
+        window.destroy()
+        self.unmanage_window(window)
+        self.focus_next_window(window)
+        self.framed_window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+
+    def capture_screen(self, window):
+        debug('function: capture_screen called')
+        if window is None:
+            capture = '-window root'
+        else:
+            try:
+                capture = f'-window {self.get_window_id(window)}'
+        except:
+                return
+        now = datetime.datetime.now()
+        date = '{}-{}-{}_{}:{}:{}.{}'.format(
+            str(now.year).zfill(4),
+            str(now.month).zfill(2),
+            str(now.day).zfill(2),
+            str(now.hour).zfill(2),
+            str(now.minute).zfill(2),
+            str(now.second).zfill(2),
+            str(now.microsecond).zfill(6))
+        os.system(f'import {capture} {SCREENSHOT_DIR}/capture{date}.png')
+        
+    def get_idle_sources(self):
+        """
+        PulseAudioの入力ソース一覧から、現在IDLE状態のモニターデバイス名を取得する。
+        - 録画時に音声入力デバイス（例: monitor of built-in audio）を自動選択する用途で使う
+        - IDLE状態のものだけをリストで返す
+        """
+        # パイプでコマンドの出力を取得
+        result = subprocess.run(['pactl', 'list', 'sources', 'short'], stdout=subprocess.PIPE)
+
+        # 出力を文字列に変換して行に分割
+        output = result.stdout.decode('utf-8').strip().split('\n')
+
+        idle_sources = []
+
+        # 各行を処理
+        for line in output:
+            # 各列をスペースまたはタブで分割
+            columns = line.split()
+        
+            # 第7列目（インデックス6）が 'idle' だったら、第2列目（インデックス1）を取得
+            if len(columns) > 6 and columns[6] == 'IDLE':
+                idle_sources.append(columns[1])
+
+        return idle_sources
+
+    def get_local_sink_name(self):
+        """
+        pactl list short sinks の出力から一番最後のsink名を返す。
+        - 状態やローカルsink判定は行わない
+        """
+        result = subprocess.run(['pactl', 'list', 'sinks', 'short'], stdout=subprocess.PIPE)
+        output = result.stdout.decode('utf-8').strip().split('\n')
+        if not output:
+            return None
+        # 最後の行のsink名（2列目）を返す
+        last_line = output[-1]
+        columns = last_line.split()
+        if len(columns) > 1:
+            return columns[1]
+        return None
+
+    def record_screen(self, window):
+        """
+        画面録画を開始・停止する。
+        - 録画中でなければffmpegで画面＋音声を録画開始、再度呼ぶと録画停止
+        - windowが指定されていればそのウィンドウ領域だけ録画、なければ全画面録画
+        - PulseAudioのIDLEなモニターデバイスを自動選択
+        注意: ffmpeg, pactl, PulseAudioが必要
+        """
+        global RECORDING_PROCESS
+        debug('function: capture_screen called')
+
+        if RECORDING_PROCESS is None:
+            # 録画開始
+            capture = '-video_size 1920x1280 -framerate 60 -f x11grab -i :0.0'  # 全画面録画設定
+
+            # ウィンドウ指定がある場合、そのウィンドウの位置とサイズを取得して録画範囲を限定
+            if window is not None:
+                try:
+        geom = self.get_window_geometry(window)
+                    capture = f'-video_size {geom.width}x{geom.height} -framerate 60 -f x11grab -i :0.0+{geom.x},{geom.y}'
+                except Exception as e:
+                    debug(f'Failed to get window geometry: {e}')
+                    # ウィンドウ情報が取得できなければ全画面録画にフォールバック
+
+            # 保存先ディレクトリ（存在しなければ作成）
+            SCREENSHOT_DIR = os.path.expanduser('~/Videos')
+            os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+
+            # ファイル名に現在時刻を含める
+            now = datetime.datetime.now()
+            date = now.strftime('%Y-%m-%d_%H-%M-%S-%f')
+            output_file = os.path.join(SCREENSHOT_DIR, f'{date}.mp4')
+
+            # PulseAudioのモニターデバイスを指定
+            # 下記のmonitor_deviceの値は、 `pactl list sources short`で確認したものを使用
+            try:
+                monitor_device = self.get_idle_sources()[0]
+            except IndexError:
+                return -1
+            audio_input = f'-f pulse -i {monitor_device}'
+
+            # ffmpegコマンドを構築
+            cmd = f'ffmpeg {capture} {audio_input} -c:v libx264 -preset ultrafast -c:a aac "{output_file}"'
+            # サブプロセスでffmpegを実行
+            RECORDING_PROCESS = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid)
+
+            debug(f'Started recording to {output_file}')
+        else:
+            # 録画停止（SIGINTシグナルを送信）
+            debug('Stopping recording')
+            os.killpg(os.getpgid(RECORDING_PROCESS.pid), signal.SIGINT)
+            RECORDING_PROCESS.wait()
+            RECORDING_PROCESS = None
+            debug('Recording stopped')       
+        
+
+    def select_vscreen(self, num):
+        debug('function: select_vscreen called')
+        if num < 0:
+            return
+        if num > MAX_VSCREEN:
+            return
+        self.current_vscreen = num
         self.exposed_windows = []
-        for window in self.managed_windows:
-            if self.window_vscreen.get(window, 0) == self.current_vscreen:
-                window.map()
+        for window in self.managed_windows.keys():
+            if self.window_vscreen[window] == num:
+            window.map()
                 self.exposed_windows.append(window)
             else:
                 window.unmap()
 
-    def cb_select_vscreen(self, event, num):
-        self.select_vscreen(num)
+    def send_window_to_next_vscreen(self, window, direction):
+        debug('debug: send_window_to_next_vscreen called')
+        if window not in self.exposed_windows:
+            return None
+        idx = self.window_vscreen[window]
+        if direction == FORWARD:
+            nextidx = (idx+1) % MAX_VSCREEN
+        else:
+            nextidx = (idx-1) % MAX_VSCREEN            
+        if self.always_top[idx] == window: 
+            self.always_top[idx] = None
+            self.always_top[nextidx] = window            
+        self.window_vscreen[window] = nextidx
+        return nextidx
 
-    def cb_send_window_to_next_vscreen(self, event, direction):
-        if self.framed_window:
-            self.send_window_to_next_vscreen(self.framed_window, direction)
+    def get_tile_layout(self, tile_num):
+        debug('function: get_tile_layout called')
+        tmp = int(math.sqrt(tile_num))
+        # (row, col)
+        if tmp**2 == tile_num:
+            return (tmp, tmp)
+        if (tmp+1)*tmp >= tile_num:
+            return (tmp, tmp+1)
+        return (tmp+1, tmp+1)
+
+    def tile_windows(self, window):
+        debug('function: tile_windows called')
+        monitor = self.managed_windows.get(window, None)
+        if monitor is None:
+            return
+        target_windows = []
+        for win in self.exposed_windows:
+            if monitor == self.managed_windows.get(win, None):
+                target_windows.append(win)
+        def sort_key(window):
+            return window.id
+        target_windows.sort(key=sort_key)
+        nrows, ncols = self.get_tile_layout(len(target_windows))
+        offcuts_num = nrows*ncols - len(target_windows)
+        eidx = None
+        for i in range(len(target_windows)):
+            if PRIORITY_WINDOW in self.get_window_class(target_windows[i]).lower():
+                eidx = i
+        if eidx is not None:
+            target_windows[eidx], target_windows[ncols*(nrows-1)-1] = \
+                target_windows[ncols*(nrows-1)-1], target_windows[eidx]
+        for row in reversed(range(nrows)):
+            for col in reversed(range(ncols)):
+                if not target_windows:
+                    break
+                win = target_windows.pop(0)
+                x = monitor['x'] + monitor['width']*col//ncols
+                width = monitor['width']//ncols
+                if row == 1 and col < offcuts_num:
+                    height = monitor['height']*2//nrows
+                    y = 0 + monitor['y']
+                else:
+                    height = monitor['height']//nrows
+                    y = monitor['y'] + monitor['height']*row//nrows
+                win.configure(x=x, y=y, width=width, height=height)
+        window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+
+    def set_window_to_stack_top(self, window):
+        debug('callback: set_window_to_stack_top called')
+        if window not in self.exposed_windows:
+            return
+        idx = self.exposed_windows.index(window)
+        self.exposed_windows.pop(idx)
+        self.exposed_windows.insert(0, window)
+
+    def stack_always_top(self):
+        window = self.always_top[self.current_vscreen]
+        if window == None:
+            return
+        window.configure(stack_mode=X.Above)
+
+    def cb_focus_next_window(self, event, args):
+        """
+        ウィンドウ選択モードの切り替えと、次のウィンドウへのフォーカス移動を行う。
+        - selection modeが無効なら有効化し、キーボードグラブと枠移動を行う
+        - 有効時は次のウィンドウにフォーカスを移す
+        注意: selection modeの有効/無効や修飾キー管理に注意
+        """
+        debug('callback: cb_focus_next_window called')
+        window = self.framed_window
+        if self.is_selection_mode_enabled:
+            self.focus_next_window(self.framed_window, args)
+        else:
+            self.is_selection_mode_enabled = True
+            # キーボードとマウス入力をmosakuwmが独占する（他アプリに渡さない）
+            self.screen.root.grab_keyboard(True, X.GrabModeAsync, X.GrabModeAsync, X.CurrentTime)
+            self.set_window_to_stack_top(window)
+            if self.exposed_windows:
+                self.focus_next_window(self.exposed_windows[0])
+            # 押下中の修飾キーを記録
+            modifier = event.state
+            self.pressed_keys = set()
+            for i in range(len(self.mod_string)+1):
+                if 1<<i & modifier != 0:
+                    self.pressed_keys = self.pressed_keys | {self.mod_mask_string[1<<i]}
+
+    def cb_raise_window(self, event):
+        debug('callback: cb_raise_window called')
+        window = event.child
+        self.focus_window(window)
+        self.set_window_to_stack_top(window)
+
+    def cb_maximize_window(self, event, args):
+        debug('callback: cb_maximize_window called')
+        window = self.framed_window
+        try:
+            self.maximize_window(window, args)
+            # 焦点をあてたウィンドウの左端を基準に
+            # (INIT_PTR_POS, INIT_PTR_POS)にポインターを配置
+            window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+            self.draw_frame_windows()
+        except:
+            return
+
+    def cb_halve_window(self, event, args):
+        debug('callback: cb_halve_window called')
+        window = self.framed_window
+        try:
+            self.halve_window(window, args)           
+            window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+            self.draw_frame_windows()
+        except:
+            return
+
+    def cb_move_window_to_next_monitor(self, event):
+        debug('callback: cb_move_window_to_next_monitor called')
+        window = self.framed_window
+        try:
+            self.move_window_to_next_monitor(window)
+            window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+            self.draw_frame_windows()
+        except:
+            return
+
+    def cb_swap_windows_bw_monitors(self, event):
+        debug('callback: cb_swap_windows_bw_monitors called')
+        for window in self.exposed_windows:
+            self.move_window_to_next_monitor(window)
+        window = self.framed_window 
+        window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+        self.focus_window(window)
+
+    def cb_destroy_window(self, event):
+        debug('callback: cb_destroy_window called')
+        window = self.framed_window
+        try:
+            self.destroy_window(window)
+            # self.focus_next_window(window) 
+            # self.framed_window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+        except:
+            return
+
+    def cb_capture_screen(self, event, args):
+        debug('callback: cb_capture_screen called')
+        window = self.framed_window
+        if args == 'current':
+            try:
+                self.capture_screen(window)
+            except:
+                return
+        else:
+            self.capture_screen(None)
+
+    def cb_record_screen(self, event, args):
+        debug('callback: cb_record_screen called')
+        # window = self.framed_window
+        if args == 'current':
+            try:
+                self.record_screen(None)
+            except:
+                return
+            else:
+            self.record_screen(None)            
+
+    def cb_select_vscreen(self, event, num):
+        debug('callback: cb_select_vscreen called')
+        if self.current_vscreen == num:
+            return
+        self.select_vscreen(num)        
+        if self.exposed_windows:
+            self.sort_exposed_windows()
+            self.focus_window(self.exposed_windows[0]) 
+            self.framed_window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+        else:
+            self.framed_window = None
+            self.unmap_frame_windows()
+
+    def cb_send_window_to_next_vscreen(self, event, args):
+        debug('callback: cb_send_window_to_next_screen called')
+        window = self.framed_window
+        idx = self.send_window_to_next_vscreen(window, args)
+        if idx is not None:
+            self.select_vscreen(idx) 
+            window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+            self.focus_window(window)
+
+    def cb_tile_windows(self, event):
+        debug('callback: cb_tile_windows called')
+        window = self.framed_window
+        self.tile_windows(window)
+        self.focus_window(window)
+        self.coverdwindows.clear()
+        self.special_window.clear()
+
+    def cb_reconfigure_monitors(self, event, remap):
+        debug('callback: cb_reconfigure_monitors called')
+        self.reconfigure_monitors(remap)
+        self.focus_window(self.framed_window)
+
+    def cb_set_always_top(self, event):
+        """
+        特定のウィンドウを仮想スクリーン上で常に最前面に固定・解除する。
+        - 固定したウィンドウの短径領域に完全に含まれるウィンドウをcoverdwindowsに追加
+        - 解除やtile時はcoverdwindows/special_windowをクリア
+        注意: 複数ウィンドウ固定時の挙動やtileとの連携に注意
+        """
+        if self.always_top[self.current_vscreen] == self.framed_window:
+            self.always_top[self.current_vscreen] = None
+            # これだと 2つ以上 ウィンドウを固定したときの思った通りの動作をしない
+            self.coverdwindows.clear()
+            self.special_window = [element for element in self.special_window if element != self.framed_window]
+            self.draw_frame_windows()
+        else:
+            self.always_top[self.current_vscreen] = self.framed_window
+            self.coverd_check(self.framed_window)
+            self.special_window.append(self.framed_window)
+            self.draw_frame_windows()
+
+    def coverd_check(self, parent_window):
+        geom_parent_window = self.get_window_geometry(parent_window)
+        for window in self.exposed_windows:
+            IsCoverd = True
+            if window == parent_window:
+                continue
+        else:
+                geom = self.get_window_geometry(window)
+                delta = 50
+                if geom.x < geom_parent_window.x - delta:
+                    IsCoverd = False
+                if geom.y < geom_parent_window.y - delta:
+                    IsCoverd = False
+                if geom.x + geom.width > geom_parent_window.x + geom_parent_window.width + delta:
+                    IsCoverd = False
+                if geom.y + geom.height > geom_parent_window.y + geom_parent_window.height + delta:
+                    IsCoverd = False
+                if IsCoverd:
+                    self.coverdwindows.append(window)
+               
+
+    def handle_motion_notify(self, event):
+        debug('handler: handle_motion_notify called')
+        xd = event.root_x - self.start.root_x
+        yd = event.root_y - self.start.root_y
+        if self.start.child == X.NONE:
+            return
+        now = time.time()
+        if now - self.last_dragged_time < DRAG_INTERVAL:
+            return
+        self.last_dragged_time = now
+        if event.child in self.frame_windows.values():
+            return
+        if self.start.detail == 1:
+            # move
+            self.start.child.configure(
+                x = self.start_geom.x + xd,
+                y = self.start_geom.y + yd)
+        elif self.start.detail == 3:
+            # resize
+            if self.start_geom.width+xd <= WINDOW_MIN_WIDTH:
+                return
+            if self.start_geom.height+yd <= WINDOW_MIN_HEIGHT:
+                return
+            self.start.child.configure(
+                width = self.start_geom.width + xd,
+                height = self.start_geom.height + yd)
+        self.draw_frame_windows()
+
+    def handle_button_press(self, event):
+        debug('handler: handle_button_press called')
+        window = event.child
+        if window in self.frame_windows.values():
+            return
+        if window not in self.managed_windows.keys():
+            return
+        self.screen.root.grab_pointer(True,
+                                      X.PointerMotionMask |
+                                      X.ButtonReleaseMask,
+                                      X.GrabModeAsync,
+                                      X.GrabModeAsync,
+                                      X.NONE, X.NONE, 0)
+        self.focus_window(window)
+        self.start = event
+        self.start_geom = self.get_window_geometry(window)
+
+    def handle_button_release(self, event):
+        debug('hhandle_button_release(seandler: handle_button_release called')
+        self.display.ungrab_pointer(0)
+        self.managed_windows[event.child] = self.get_monitor_geometry_with_window(event.child)
+
+    def handle_enter_notify(self, event):
+        debug('handler: handle_enter_notify called')
+        window = event.window
+        window.set_input_focus(X.RevertToParent, 0)
+        
+    # ウィンドウが表示されたときに、実行される。表示を通知するためのコマンド
+    def handle_map_notify(self, event):
+        debug('handler: handle_map_notify called')
+        self.manage_window(event.window)
+
+    def handle_unmap_notify(self, event):
+        debug('handler: handle_unmap_notify called')
+        if event.window in self.exposed_windows:
+            self.unmanage_window(event.window)
+
+    def handle_map_request(self, event):
+        debug('handler: handle_map_request called')
+        self.manage_window(event.window)
+        self.focus_window(event.window)
+        self.framed_window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+
+    def handle_destroy_notify(self, event):
+        debug('handler: handle_destroy_notify called')
+        self.unmanage_window(event.window)
+        # self.focus_next_window(event.window)
+        # self.framed_window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
+
+    #  キーが押下されたときに、呼び出される。 
+    def handle_key_press(self, event): 
+        debug('handler: handle_key_press called')
+        keycode = event.detail
+        modifier = event.state
+        entry = (keycode, modifier)
+        # self.keybindsという辞書からentryに対応するルールを取得
+        # ex) keycode 38, modifier 修飾キーマスクの和集合
+        # getは辞書からキーを取得できるメソッド
+        rule = self.keybinds.get(entry, None)
+        if rule:
+            if 'method' in rule.keys():
+                method = getattr(self, rule['method'], None)
+                arg = rule.get('arg', None)
+                if method:
+                    if arg is not None:
+                        method(event, arg)
+                    else:
+                        method(event)
+            elif 'function' in rule.keys():
+                function = globals().get(rule['function'], None)
+                if function:
+                    function()
+            elif 'command' in rule.keys():
+                os.system(rule['command'])
+
+    def handle_key_release(self, event):
+        debug('handler: handle_key_release called')
+        keycode = event.detail
+        modgroup = None
+        for mod, keys in self.modmap.items():
+            if keycode in keys:
+                modgroup = mod
+                break
+        if modgroup == None:
+            return
+        if modgroup in self.pressed_keys:
+            # disable selection mode
+            self.display.ungrab_keyboard(X.CurrentTime)
+            self.is_selection_mode_enabled = False
+            # self.selection_window.unmap()
+
+    def handle_configure_request(self, event):
+        debug('handler: handle_configure_request called')
+        window = event.window
+        x = event.x
+        y = event.y
+        width = event.width
+        height = event.height
+        mask = event.value_mask
+        if mask == 0b1111:
+            window.configure(x=x, y=y, width=width, height=height)
+        elif mask == 0b1100:
+            window.configure(width=width, height=height)
+        elif mask == 0b0011:
+            window.configure(x=x, y=y)
+        elif mask == 0b01000000:
+            window.configure(event.stack_mode)
+        if window in self.managed_windows.keys():
+            self.managed_windows[window] = self.get_monitor_geometry_with_window(window)
+            self.focus_window(window)
+            
+    def handle_randr_screen_change(self, event):
+        debug('XRandR event detected, reconfiguring monitors...')
+        outputs = self.get_current_outputs()
+        primary = None
+        external = None
+        for name, info in outputs.items():
+            if info['primary'] and info['connected']:
+                primary = name
+            elif info['connected'] and ('DP-' in name or 'HDMI-' in name):
+                external = name
+        # 既に拡張済みなら何もしない
+        if primary and external:
+            subprocess.call(f'xrandr --output {external} --auto --right-of {primary}', shell=True)
+        elif primary:
+            subprocess.call(f'xrandr --output {primary} --auto', shell=True)
+        # モニタ構成が変わった場合のみ再構成
+        new_geometries = self.get_available_monitor_geometries()
+        if new_geometries != self.monitor_geometries:
+            self.reconfigure_monitors(False)
+        # ローカルsink名を記憶済みのものに切り替え
+        if self.local_sink_name:
+            subprocess.call(f'pactl set-default-sink {self.local_sink_name}', shell=True)
+        debug(f"[randr] monitor_geometries: {self.monitor_geometries}")
+        debug(f"[randr] managed_windows: {list(self.managed_windows.keys())}")
+        debug(f"[randr] exposed_windows: {self.exposed_windows}")
+
+    def get_current_outputs(self):
+        """
+        現在のxrandr出力状態を辞書で返す
+        { 'eDP-1': {'connected': True, 'primary': True, ...}, ... }
+        """
+        outputs = {}
+        xrandr_out = subprocess.getoutput('xrandr')
+        for line in xrandr_out.split('\n'):
+            if ' connected' in line or ' disconnected' in line:
+                name = line.split()[0]
+                connected = ' connected' in line
+                primary = ' primary' in line
+                outputs[name] = {'connected': connected, 'primary': primary}
+        return outputs
+
+    def cb_force_external_monitor(self, event):
+        debug('[cb_force_external_monitor] called')
+        self.update_known_external_outputs()
+        outputs = self.get_current_outputs()
+        primary = None
+        for name, info in outputs.items():
+            if info['primary'] and info['connected']:
+                primary = name
+        # known_external_outputsのうち、現在disconnectedなものだけoff
+        for ext in self.known_external_outputs:
+            if ext == primary:
+                continue
+            if not outputs.get(ext, {}).get('connected', False):
+                debug(f'[cb_force_external_monitor] running: xrandr --output {ext} --off')
+                subprocess.call(f'xrandr --output {ext} --off', shell=True)
+        # connectedな外部出力だけon
+        for ext in self.known_external_outputs:
+            if ext == primary:
+                continue
+            if outputs.get(ext, {}).get('connected', False):
+                debug(f'[cb_force_external_monitor] running: xrandr --output {ext} --auto --right-of {primary}')
+                subprocess.call(f'xrandr --output {ext} --auto --right-of {primary}', shell=True)
+        # モニタ構成が変わった場合のみ再構成
+        new_geometries = self.get_available_monitor_geometries()
+        if new_geometries != self.monitor_geometries:
+            self.reconfigure_monitors(False)
+        debug(f'[cb_force_external_monitor] monitor_geometries: {self.monitor_geometries}')
+
+    def loop(self):
+        while True:
+            event = self.display.next_event()
+            if event.type in EVENTS:                
+                handler = getattr(self, EVENTS[event.type], None)
+                if handler:
+                    handler(event)                    
+                            
 
 def main():
-    wm = Mosakuwm()
+    # Load per-user RC script (~/.mosakurc) if it exists
     try:
+        with open(os.path.expanduser('~/.mosakurc'), 'r') as rc:
+            exec(rc.read(), globals())
+    except FileNotFoundError:
+        pass
+    # 外部ディスプレイ自動拡張
+    xrandr_out = subprocess.getoutput('xrandr')
+    primary = None
+    external = None
+    for line in xrandr_out.split('\n'):
+        if ' connected primary' in line:
+            primary = line.split()[0]
+        elif ' connected' in line and 'primary' not in line:
+            external = line.split()[0]
+    if primary and external:
+        subprocess.call(f'xrandr --output {external} --auto --right-of {primary}', shell=True)
+    wm = mosakuWM()
+    wm.reconfigure_monitors(False)
+    for win in wm.managed_windows.keys():
+        print(wm.get_window_name(win), file=sys.stderr)
         wm.loop()
-    except KeyboardInterrupt:
-        sys.exit(0)
 
 if __name__ == '__main__':
     main() 
