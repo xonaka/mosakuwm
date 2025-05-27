@@ -1,0 +1,13 @@
+# ~/.mosakurc example for mosakuwm
+# Change frame color
+FRAME_COLOR = 'lemon chiffon'
+
+# Add key binding: Ctrl+Alt+9 to launch xterm
+KEY_BINDS[('9', X.Mod1Mask | X.ControlMask)] = {
+    'command': 'xterm &'
+}
+
+# Add key binding: Shift+F12 to run a shell script
+KEY_BINDS[('F12', X.ShiftMask)] = {
+    'command': '/path/to/your/script.sh'
+} 
