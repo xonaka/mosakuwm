@@ -208,6 +208,7 @@ def debug(str):
 
 # --- デバッグ用: 起動時の環境情報を出力 ---
 def debug_env_info():
+    debug('function: debug_env_info called')
     debug(f"[mosakuwm起動] UID={os.getuid()} USER={os.getenv('USER')} DISPLAY={os.getenv('DISPLAY')} SHELL={os.getenv('SHELL')}")
     debug(f"[mosakuwm起動] sys.argv={sys.argv}")
     debug(f"[mosakuwm起動] PWD={os.getcwd()}")
@@ -215,6 +216,7 @@ def debug_env_info():
 
 # --- Emacs自動起動（既に起動していなければ） ---
 def ensure_emacs_running():
+    debug('function: ensure_emacs_running called')
     try:
         out = subprocess.getoutput('pgrep -x emacs')
         if not out.strip():
@@ -226,6 +228,7 @@ def ensure_emacs_running():
         debug(f'[mosakuwm] Emacs自動起動チェックで例外: {e}')
 
 def restart():
+    debug('function: restart called')
     debug(f'restrating {sys.argv[0]}')
     os.execvp(sys.argv[0], [sys.argv[0]])
 
@@ -293,6 +296,7 @@ class mosakuWM:
         self.update_known_external_outputs()
 
     def update_known_external_outputs(self):
+        debug('function: update_known_external_outputs called')
         # xrandr出力からDP-*, HDMI-*を全て記憶
         xrandr_out = subprocess.getoutput('xrandr')
         for line in xrandr_out.split('\n'):
@@ -328,7 +332,7 @@ class mosakuWM:
             debug(f'[grab_keys] ({key}, {modifier}) grabbed as ({keycode}, {modifier})')
 
     def grab_buttons(self):
-        debug('function: grub_buttons called')
+        debug('function: grab_buttons called')
         for button in [1, 3]:
             self.screen.root.grab_button(
                 button, X.Mod1Mask, True,
@@ -336,7 +340,7 @@ class mosakuWM:
                 X.GrabModeAsync, X.NONE, X.NONE)
 
     def create_frame_windows(self):
-        debug('function: crate_frame_windows called')
+        debug('function: create_frame_windows called')
         self.frame_pixel = self.colormap.alloc_named_color(FRAME_COLOR).pixel
         for side in ['left', 'right', 'upper', 'lower']:
             window = self.screen.root.create_window(
@@ -348,10 +352,8 @@ class mosakuWM:
             window.map()
             self.frame_windows[side] = window
 
-
-
     def draw_frame_windows(self):
-        #debug('function: draw_frame_windows called')
+        debug('function: draw_frame_windows called')
         if self.framed_window == None:
             return
 
@@ -395,15 +397,14 @@ class mosakuWM:
             self.frame_windows[side].map()
 
     def map_frame_windows(self):
-        #debug('function: map_frame_windows called')
+        debug('function: map_frame_windows called')
         for side in ['left', 'right', 'upper', 'lower']:
             self.frame_windows[side].map()
 
     def unmap_frame_windows(self):
-        #debug('function: unmap_frame_windows called')
+        debug('function: unmap_frame_windows called')
         for side in ['left', 'right', 'upper', 'lower']:
             self.frame_windows[side].unmap()
-
 
     def create_selection_window(self, monitor=1):
         """
@@ -412,7 +413,7 @@ class mosakuWM:
         - 通常はウィンドウ切り替えや選択モード時に利用される
         - 指定したモニター上の中央付近に1/3幅で配置される
         """
-        debug('function: crate_selection_window called')
+        debug('function: create_selection_window called')
         monitor = list(self.monitor_geometries.values())[monitor%len(self.monitor_geometries)]
         width = monitor['width']//3
         height = 10
@@ -429,7 +430,7 @@ class mosakuWM:
         self.selection_window.change_attributes(backing_store=X.Always)
 
     def update_selection_window(self):
-        #debug('function: update_selection_window called')
+        debug('function: update_selection_window called')
         geom = self.get_window_geometry(self.selection_window)
         if geom == None:
             return
@@ -455,7 +456,7 @@ class mosakuWM:
         self.selection_window.configure(stack_mode=X.Above)
 
     def get_window_attributes(self, window):
-        #debug('function: get_window_attributes called')        
+        debug('function: get_window_attributes called')        
         try:
             # /usr/local/lib/python3.10/dist-packages/Xlib/xobject/drawble.py
             # /usr/local/lib/python3.10/dist-packages/Xlib/protocol/request.py
@@ -464,7 +465,7 @@ class mosakuWM:
             return None
 
     def get_window_class(self, window):
-        #debug('function: get_window_class called')
+        debug('function: get_window_class called')
         try:
             cmd, cls = window.get_wm_class()
         except:
@@ -482,7 +483,7 @@ class mosakuWM:
             return ''
 
     def get_window_id(self, window):
-        #debug('function: get_window_id called')
+        debug('function: get_window_id called')
         try:
             return window.id
         except:
@@ -578,13 +579,14 @@ class mosakuWM:
         next_window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
 
     def get_window_geometry(self, window):
-        #debug('debug: get_window_geometry called')
+        debug('function: get_window_geometry called')
         try:
             return window.get_geometry()
         except:
             return None
 
     def get_monitor_coverarea(self, wgeom, mgeom):
+        debug('function: get_monitor_coverarea called')
         xmin = min(wgeom.x, mgeom['x'])
         xmax = max(wgeom.x + wgeom.width, mgeom['x'] + mgeom['width'])
         xsum = wgeom.width + mgeom['width']
@@ -597,7 +599,7 @@ class mosakuWM:
 
 
     def get_monitor_geometry_with_window(self, window):
-        #debug('function: get_monitor_geometry_with_window called')
+        debug('function: get_monitor_geometry_with_window called')
         """
         指定したウィンドウが「どの物理モニターに主に属しているか」を判定し、そのモニターの位置・サイズ情報（ジオメトリ）を返す。
         - ウィンドウが複数のモニターにまたがっている場合でも、「一番多く重なっているモニター」を自動で選ぶ。
@@ -616,6 +618,7 @@ class mosakuWM:
         return maxmonitor
 
     def toggle_xpymon_and_adjust_windows(self, event):
+        debug('function: toggle_xpymon_and_adjust_windows called')
         """
         xpymonの起動/終了に応じて、全ウィンドウとモニタのサイズ・位置を調整する。
         - xpymonが起動していれば終了し、全ウィンドウを拡大
@@ -657,6 +660,7 @@ class mosakuWM:
             self.draw_frame_windows()
 
     def get_screen_size(self):
+        debug('function: get_screen_size called')
         lines = subprocess.getoutput('xrandr').split('\n')
         match = re.search(r'current (\d+) x (\d+)', lines[0])
         return {
@@ -776,7 +780,7 @@ class mosakuWM:
                 self.modmap[modifier].append(value)
 
     def maximize_window(self, window, mask):
-        #debug('function: maximize_window called')
+        debug('function: maximize_window called')
         if window not in self.exposed_windows:
             debug('debug: at maximize_window window is not in exposed_windows')
             return
@@ -802,7 +806,7 @@ class mosakuWM:
             height=height)
 
     def halve_window(self, window, args):
-        #debug('function: halve_window called')
+        debug('function: halve_window called')
         if window not in self.exposed_windows:
             return
         geom = self.get_window_geometry(window)
@@ -834,7 +838,7 @@ class mosakuWM:
         self.managed_windows[window] = self.get_monitor_geometry_with_window(window)
 
     def move_window_to_monitor(self, window, dst):
-        #debug('function: move_window_to_monitor called')
+        debug('function: move_window_to_monitor called')
         # dst must be a geometry.
         if window not in self.managed_windows.keys():
             return
@@ -861,7 +865,7 @@ class mosakuWM:
         self.managed_windows[window] = dst
 
     def move_window_to_next_monitor(self, window):
-        #debug('function: move_window_to_next_monitor called')
+        debug('function: move_window_to_next_monitor called')
         if window not in self.exposed_windows:
             return
         geom = self.get_window_geometry(window)
@@ -908,6 +912,7 @@ class mosakuWM:
         os.system(f'import {capture} {SCREENSHOT_DIR}/capture{date}.png')
         
     def get_idle_sources(self):
+        debug('function: get_idle_sources called')
         """
         PulseAudioの入力ソース一覧から、現在IDLE状態のモニターデバイス名を取得する。
         - 録画時に音声入力デバイス（例: monitor of built-in audio）を自動選択する用途で使う
@@ -933,6 +938,7 @@ class mosakuWM:
         return idle_sources
 
     def get_local_sink_name(self):
+        debug('function: get_local_sink_name called')
         """
         pactl list short sinks の出力から一番最後のsink名を返す。
         - 状態やローカルsink判定は行わない
@@ -957,7 +963,7 @@ class mosakuWM:
         注意: ffmpeg, pactl, PulseAudioが必要
         """
         global RECORDING_PROCESS
-        debug('function: capture_screen called')
+        debug('function: record_screen called')
 
         if RECORDING_PROCESS is None:
             # 録画開始
@@ -1020,7 +1026,7 @@ class mosakuWM:
                 window.unmap()
 
     def send_window_to_next_vscreen(self, window, direction):
-        debug('debug: send_window_to_next_vscreen called')
+        debug('function: send_window_to_next_vscreen called')
         if window not in self.exposed_windows:
             return None
         idx = self.window_vscreen[window]
@@ -1082,7 +1088,7 @@ class mosakuWM:
         window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
 
     def set_window_to_stack_top(self, window):
-        debug('callback: set_window_to_stack_top called')
+        debug('function: set_window_to_stack_top called')
         if window not in self.exposed_windows:
             return
         idx = self.exposed_windows.index(window)
@@ -1090,6 +1096,7 @@ class mosakuWM:
         self.exposed_windows.insert(0, window)
 
     def stack_always_top(self):
+        debug('function: stack_always_top called')
         window = self.always_top[self.current_vscreen]
         if window == None:
             return
@@ -1102,7 +1109,7 @@ class mosakuWM:
         - 有効時は次のウィンドウにフォーカスを移す
         注意: selection modeの有効/無効や修飾キー管理に注意
         """
-        debug('callback: cb_focus_next_window called')
+        debug('function: cb_focus_next_window called')
         window = self.framed_window
         if self.is_selection_mode_enabled:
             self.focus_next_window(self.framed_window, args)
@@ -1121,13 +1128,13 @@ class mosakuWM:
                     self.pressed_keys = self.pressed_keys | {self.mod_mask_string[1<<i]}
 
     def cb_raise_window(self, event):
-        debug('callback: cb_raise_window called')
+        debug('function: cb_raise_window called')
         window = event.child
         self.focus_window(window)
         self.set_window_to_stack_top(window)
 
     def cb_maximize_window(self, event, args):
-        debug('callback: cb_maximize_window called')
+        debug('function: cb_maximize_window called')
         window = self.framed_window
         try:
             self.maximize_window(window, args)
@@ -1139,7 +1146,7 @@ class mosakuWM:
             return
 
     def cb_halve_window(self, event, args):
-        debug('callback: cb_halve_window called')
+        debug('function: cb_halve_window called')
         window = self.framed_window
         try:
             self.halve_window(window, args)           
@@ -1149,7 +1156,7 @@ class mosakuWM:
             return
 
     def cb_move_window_to_next_monitor(self, event):
-        debug('callback: cb_move_window_to_next_monitor called')
+        debug('function: cb_move_window_to_next_monitor called')
         window = self.framed_window
         try:
             self.move_window_to_next_monitor(window)
@@ -1159,7 +1166,7 @@ class mosakuWM:
             return
 
     def cb_swap_windows_bw_monitors(self, event):
-        debug('callback: cb_swap_windows_bw_monitors called')
+        debug('function: cb_swap_windows_bw_monitors called')
         for window in self.exposed_windows:
             self.move_window_to_next_monitor(window)
         window = self.framed_window 
@@ -1167,7 +1174,7 @@ class mosakuWM:
         self.focus_window(window)
 
     def cb_destroy_window(self, event):
-        debug('callback: cb_destroy_window called')
+        debug('function: cb_destroy_window called')
         window = self.framed_window
         try:
             self.destroy_window(window)
@@ -1177,7 +1184,7 @@ class mosakuWM:
             return
 
     def cb_capture_screen(self, event, args):
-        debug('callback: cb_capture_screen called')
+        debug('function: cb_capture_screen called')
         window = self.framed_window
         if args == 'current':
             try:
@@ -1188,7 +1195,7 @@ class mosakuWM:
             self.capture_screen(None)
 
     def cb_record_screen(self, event, args):
-        debug('callback: cb_record_screen called')
+        debug('function: cb_record_screen called')
         # window = self.framed_window
         if args == 'current':
             try:
@@ -1199,7 +1206,7 @@ class mosakuWM:
             self.record_screen(None)
 
     def cb_select_vscreen(self, event, num):
-        debug('callback: cb_select_vscreen called')
+        debug('function: cb_select_vscreen called')
         if self.current_vscreen == num:
             return
         self.select_vscreen(num)        
@@ -1212,7 +1219,7 @@ class mosakuWM:
             self.unmap_frame_windows()
 
     def cb_send_window_to_next_vscreen(self, event, args):
-        debug('callback: cb_send_window_to_next_screen called')
+        debug('function: cb_send_window_to_next_vscreen called')
         window = self.framed_window
         idx = self.send_window_to_next_vscreen(window, args)
         if idx is not None:
@@ -1221,7 +1228,7 @@ class mosakuWM:
             self.focus_window(window)
 
     def cb_tile_windows(self, event):
-        debug('callback: cb_tile_windows called')
+        debug('function: cb_tile_windows called')
         window = self.framed_window
         self.tile_windows(window)
         self.focus_window(window)
@@ -1229,11 +1236,12 @@ class mosakuWM:
         self.special_window.clear()
 
     def cb_reconfigure_monitors(self, event, remap):
-        debug('callback: cb_reconfigure_monitors called')
+        debug('function: cb_reconfigure_monitors called')
         self.reconfigure_monitors(remap)
         self.focus_window(self.framed_window)
 
     def cb_set_always_top(self, event):
+        debug('function: cb_set_always_top called')
         """
         特定のウィンドウを仮想スクリーン上で常に最前面に固定・解除する。
         - 固定したウィンドウの短径領域に完全に含まれるウィンドウをcoverdwindowsに追加
@@ -1253,6 +1261,7 @@ class mosakuWM:
             self.draw_frame_windows()
 
     def coverd_check(self, parent_window):
+        debug('function: coverd_check called')
         geom_parent_window = self.get_window_geometry(parent_window)
         for window in self.exposed_windows:
             IsCoverd = True
@@ -1274,7 +1283,7 @@ class mosakuWM:
                
 
     def handle_motion_notify(self, event):
-        debug('handler: handle_motion_notify called')
+        debug('function: handle_motion_notify called')
         xd = event.root_x - self.start.root_x
         yd = event.root_y - self.start.root_y
         if self.start.child == X.NONE:
@@ -1302,7 +1311,7 @@ class mosakuWM:
         self.draw_frame_windows()
 
     def handle_button_press(self, event):
-        debug('handler: handle_button_press called')
+        debug('function: handle_button_press called')
         window = event.child
         if window in self.frame_windows.values():
             return
@@ -1319,40 +1328,40 @@ class mosakuWM:
         self.start_geom = self.get_window_geometry(window)
 
     def handle_button_release(self, event):
-        debug('hhandle_button_release(seandler: handle_button_release called')
+        debug('function: handle_button_release called')
         self.display.ungrab_pointer(0)
         self.managed_windows[event.child] = self.get_monitor_geometry_with_window(event.child)
 
     def handle_enter_notify(self, event):
-        debug('handler: handle_enter_notify called')
+        debug('function: handle_enter_notify called')
         window = event.window
         window.set_input_focus(X.RevertToParent, 0)
         
     # ウィンドウが表示されたときに、実行される。表示を通知するためのコマンド
     def handle_map_notify(self, event):
-        debug('handler: handle_map_notify called')
+        debug('function: handle_map_notify called')
         self.manage_window(event.window)
 
     def handle_unmap_notify(self, event):
-        debug('handler: handle_unmap_notify called')
+        debug('function: handle_unmap_notify called')
         if event.window in self.exposed_windows:
             self.unmanage_window(event.window)
 
     def handle_map_request(self, event):
-        debug('handler: handle_map_request called')
+        debug('function: handle_map_request called')
         self.manage_window(event.window)
         self.focus_window(event.window)
         self.framed_window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
 
     def handle_destroy_notify(self, event):
-        debug('handler: handle_destroy_notify called')
+        debug('function: handle_destroy_notify called')
         self.unmanage_window(event.window)
         # self.focus_next_window(event.window)
         # self.framed_window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
 
     #  キーが押下されたときに、呼び出される。 
     def handle_key_press(self, event): 
-        debug('handler: handle_key_press called')
+        debug('function: handle_key_press called')
         keycode = event.detail
         modifier = event.state
         entry = (keycode, modifier)
@@ -1379,7 +1388,7 @@ class mosakuWM:
             debug(f'[handle_key_press] 対応アクションなし: entry={entry}')
 
     def handle_key_release(self, event):
-        debug('handler: handle_key_release called')
+        debug('function: handle_key_release called')
         keycode = event.detail
         modgroup = None
         for mod, keys in self.modmap.items():
@@ -1395,7 +1404,7 @@ class mosakuWM:
             # self.selection_window.unmap()
 
     def handle_configure_request(self, event):
-        debug('handler: handle_configure_request called')
+        debug('function: handle_configure_request called')
         window = event.window
         x = event.x
         y = event.y
@@ -1415,6 +1424,7 @@ class mosakuWM:
             self.focus_window(window)
             
     def handle_randr_screen_change(self, event):
+        debug('function: handle_randr_screen_change called')
         debug('XRandR event detected, reconfiguring monitors...')
         outputs = self.get_current_outputs()
         primary = None
@@ -1445,6 +1455,7 @@ class mosakuWM:
         現在のxrandr出力状態を辞書で返す
         { 'eDP-1': {'connected': True, 'primary': True, ...}, ... }
         """
+        debug('function: get_current_outputs called')
         outputs = {}
         xrandr_out = subprocess.getoutput('xrandr')
         for line in xrandr_out.split('\n'):
@@ -1456,7 +1467,7 @@ class mosakuWM:
         return outputs
 
     def cb_force_external_monitor(self, event):
-        debug('[cb_force_external_monitor] called')
+        debug('function: cb_force_external_monitor called')
         self.update_known_external_outputs()
         outputs = self.get_current_outputs()
         primary = None
@@ -1484,6 +1495,7 @@ class mosakuWM:
         debug(f'[cb_force_external_monitor] monitor_geometries: {self.monitor_geometries}')
 
     def loop(self):
+        debug('function: loop called')
         while True:
             event = self.display.next_event()
             if event.type in EVENTS:                
@@ -1493,6 +1505,7 @@ class mosakuWM:
                             
 
 def main():
+    debug('function: main called')
     debug_env_info()
     ensure_emacs_running()
     # Load per-user RC script (~/.mosakurc) if it exists
