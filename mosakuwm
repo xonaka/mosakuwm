@@ -206,6 +206,25 @@ KEY_BINDS = {
 def debug(str):
     print(str, file=sys.stderr, flush=True)
 
+# --- デバッグ用: 起動時の環境情報を出力 ---
+def debug_env_info():
+    debug(f"[mosakuwm起動] UID={os.getuid()} USER={os.getenv('USER')} DISPLAY={os.getenv('DISPLAY')} SHELL={os.getenv('SHELL')}")
+    debug(f"[mosakuwm起動] sys.argv={sys.argv}")
+    debug(f"[mosakuwm起動] PWD={os.getcwd()}")
+    debug(f"[mosakuwm起動] PATH={os.getenv('PATH')}")
+
+# --- Emacs自動起動（既に起動していなければ） ---
+def ensure_emacs_running():
+    try:
+        out = subprocess.getoutput('pgrep -x emacs')
+        if not out.strip():
+            debug('[mosakuwm] Emacsが起動していないため自動起動します')
+            subprocess.Popen([EDITOR], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            debug('[mosakuwm] Emacsは既に起動しています')
+    except Exception as e:
+        debug(f'[mosakuwm] Emacs自動起動チェックで例外: {e}')
+
 def restart():
     debug(f'restrating {sys.argv[0]}')
     os.execvp(sys.argv[0], [sys.argv[0]])
@@ -284,30 +303,29 @@ class mosakuWM:
 
     def catch_events(self):
         debug('function: catch_events called')
-        self.screen.root.change_attributes(
-            event_mask = X.SubstructureRedirectMask |
-            X.SubstructureNotifyMask |
-            X.EnterWindowMask |
-            X.LeaveWindowMask |
-            X.FocusChangeMask)
+        try:
+            self.screen.root.change_attributes(
+                event_mask = X.SubstructureRedirectMask |
+                X.SubstructureNotifyMask |
+                X.EnterWindowMask |
+                X.LeaveWindowMask |
+                X.FocusChangeMask)
+            debug('[catch_events] SubstructureRedirectMask取得成功')
+        except Exception as e:
+            debug(f'[catch_events] SubstructureRedirectMask取得失敗: {e}')
 
     def grab_keys(self):
         debug('function: grab_keys called')
         for (key, modifier), rule in KEY_BINDS.items():
-            # Acer Aspire 1350 keys
-            # Keyf          Known X keycodes
-            # Lower volume 174
-            # Raise volume 176
-            # Audio mute   160
             keysym = XK.string_to_keysym(key)
             keycode = self.display.keysym_to_keycode(keysym)
-            debug(f'debug: {key} to ({keysym}, {keycode})')
+            debug(f'[grab_keys] key={key} keysym={keysym} keycode={keycode} modifier={modifier} rule={rule}')
             if modifier is None:
                 continue
             self.screen.root.grab_key(keycode, modifier, True,
                 X.GrabModeAsync, X.GrabModeAsync)
             self.keybinds[(keycode, modifier)] = rule
-            debug(f'debug: ({key}, {modifier}) grabbed as ({keycode}, {modifier})')
+            debug(f'[grab_keys] ({key}, {modifier}) grabbed as ({keycode}, {modifier})')
 
     def grab_buttons(self):
         debug('function: grub_buttons called')
@@ -1338,11 +1356,10 @@ class mosakuWM:
         keycode = event.detail
         modifier = event.state
         entry = (keycode, modifier)
-        # self.keybindsという辞書からentryに対応するルールを取得
-        # ex) keycode 38, modifier 修飾キーマスクの和集合
-        # getは辞書からキーを取得できるメソッド
+        debug(f'[handle_key_press] keycode={keycode} modifier={modifier} entry={entry}')
         rule = self.keybinds.get(entry, None)
         if rule:
+            debug(f'[handle_key_press] 対応アクション: {rule}')
             if 'method' in rule.keys():
                 method = getattr(self, rule['method'], None)
                 arg = rule.get('arg', None)
@@ -1356,7 +1373,10 @@ class mosakuWM:
                 if function:
                     function()
             elif 'command' in rule.keys():
+                debug(f'[handle_key_press] コマンド実行: {rule["command"]}')
                 os.system(rule['command'])
+        else:
+            debug(f'[handle_key_press] 対応アクションなし: entry={entry}')
 
     def handle_key_release(self, event):
         debug('handler: handle_key_release called')
@@ -1473,6 +1493,8 @@ class mosakuWM:
                             
 
 def main():
+    debug_env_info()
+    ensure_emacs_running()
     # Load per-user RC script (~/.mosakurc) if it exists
     try:
         with open(os.path.expanduser('~/.mosakurc'), 'r') as rc:
