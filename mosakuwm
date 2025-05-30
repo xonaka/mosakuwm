@@ -342,7 +342,7 @@ class mosakuWM:
             for side in ['left', 'right', 'upper', 'lower']:
                 self.frame_windows[side].change_attributes(background_pixel=new_frame_pixel)
                 self.frame_windows[side].clear_area(0, 0, 0, 0, True) 
-            else:
+        else:
             new_frame_pixel = self.colormap.alloc_named_color(FRAME_COLOR).pixel
             for side in ['left', 'right', 'upper', 'lower']:
                 self.frame_windows[side].change_attributes(background_pixel=new_frame_pixel)
@@ -1240,7 +1240,7 @@ class mosakuWM:
             IsCoverd = True
             if window == parent_window:
                 continue
-        else:
+            else:
                 geom = self.get_window_geometry(window)
                 delta = 50
                 if geom.x < geom_parent_window.x - delta:
