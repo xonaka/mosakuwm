@@ -876,7 +876,7 @@ class mosakuWM:
         else:
             try:
                 capture = f'-window {self.get_window_id(window)}'
-        except:
+            except:
                 return
         now = datetime.datetime.now()
         date = '{}-{}-{}_{}:{}:{}.{}'.format(
@@ -948,7 +948,7 @@ class mosakuWM:
             # ウィンドウ指定がある場合、そのウィンドウの位置とサイズを取得して録画範囲を限定
             if window is not None:
                 try:
-        geom = self.get_window_geometry(window)
+                    geom = self.get_window_geometry(window)
                     capture = f'-video_size {geom.width}x{geom.height} -framerate 60 -f x11grab -i :0.0+{geom.x},{geom.y}'
                 except Exception as e:
                     debug(f'Failed to get window geometry: {e}')
@@ -996,7 +996,7 @@ class mosakuWM:
         self.exposed_windows = []
         for window in self.managed_windows.keys():
             if self.window_vscreen[window] == num:
-            window.map()
+                window.map()
                 self.exposed_windows.append(window)
             else:
                 window.unmap()
@@ -1177,8 +1177,8 @@ class mosakuWM:
                 self.record_screen(None)
             except:
                 return
-            else:
-            self.record_screen(None)            
+        else:
+            self.record_screen(None)
 
     def cb_select_vscreen(self, event, num):
         debug('callback: cb_select_vscreen called')
