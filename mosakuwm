@@ -260,6 +260,8 @@ class mosakuWM:
         # --- マルチモニタ・仮想スクリーン初期化 ---
         self.monitor_geometries = self.get_available_monitor_geometries()
         self.maxsize = self.get_screen_size()
+        # --- xpymon表示状態の管理（create_selection_windowより前に初期化） ---
+        self.xpymon_visible = False  # xpymon表示状態を管理
         # --- Xイベントのグラブ・初期ウィンドウ管理 ---
         self.catch_events()
         self.grab_keys()
@@ -294,7 +296,6 @@ class mosakuWM:
         # --- 一度でも現れた外部出力名を記憶 ---
         self.known_external_outputs = set()
         self.update_known_external_outputs()
-        self.xpymon_visible = False  # xpymon表示状態を管理
 
     def update_known_external_outputs(self):
         debug('function: update_known_external_outputs called')
@@ -408,18 +409,13 @@ class mosakuWM:
             self.frame_windows[side].unmap()
 
     def create_selection_window(self, monitor=1):
-        """
-        ウィンドウ選択用の補助ウィンドウを作成する。
-        - 画面上に細長いバー状のウィンドウを表示し、現在管理しているウィンドウのリストや選択状態を視覚的に示す
-        - 通常はウィンドウ切り替えや選択モード時に利用される
-        - 指定したモニター上の中央付近に1/3幅で配置される
-        """
         debug('function: create_selection_window called')
         monitor = list(self.monitor_geometries.values())[monitor%len(self.monitor_geometries)]
-        width = monitor['width']//3
+        eff_monitor = self.get_effective_monitor_geometry(monitor)
+        width = eff_monitor['width']//3
         height = 10
-        x = monitor['x']+monitor['width']//3
-        y = monitor['y']+monitor['height']//3
+        x = eff_monitor['x']+eff_monitor['width']//3
+        y = eff_monitor['y']+eff_monitor['height']//3
         self.selection_window = self.screen.root.create_window(
             x, y,
             width, height,
@@ -618,44 +614,33 @@ class mosakuWM:
                 maxmonitor = monitor
         return maxmonitor
 
+    def get_effective_monitor_geometry(self, monitor):
+        """
+        xpymon表示中はy+8, height-8、非表示はそのまま返す
+        """
+        if self.xpymon_visible:
+            return {
+                'name': monitor['name'],
+                'x': monitor['x'],
+                'y': monitor['y'] + 8,
+                'width': monitor['width'],
+                'height': monitor['height'] - 8,
+            }
+        else:
+            return monitor
+
     def toggle_xpymon_and_adjust_windows(self, event):
         debug('function: toggle_xpymon_and_adjust_windows called')
-        """
-        xpymonの起動/終了に応じて、全ウィンドウのサイズ・位置を調整する。
-        - xpymonが起動していれば終了し、全ウィンドウを拡大
-        - xpymonが停止していれば起動し、全ウィンドウを縮小
-        注意: monitor_geometriesは物理値のまま保持
-        """
         if self.xpymon_visible:
             os.system(f'pkill xpymon')
             self.xpymon_visible = False
-            for window in self.managed_windows:
-                geom = self.get_window_geometry(window)
-                x = geom.x
-                y = geom.y - 8
-                width = geom.width
-                height = geom.height + 8
-                window.configure(
-                    x=x,
-                    y=y,
-                    width=width,
-                    height=height)
-            self.draw_frame_windows()
         else:
             os.system(f'xpymon &')
             self.xpymon_visible = True
-            for window in self.managed_windows:
-                geom = self.get_window_geometry(window)
-                x = geom.x
-                y = geom.y + 8
-                width = geom.width
-                height = geom.height - 8
-                window.configure(
-                    x=x,
-                    y=y,
-                    width=width,
-                    height=height)
-            self.draw_frame_windows()
+        # xpymon状態に応じて全ウィンドウを再配置
+        for window in self.managed_windows:
+            self.maximize_window(window, HORIZONTAL | VERTICAL)
+        self.draw_frame_windows()
 
     def get_screen_size(self):
         debug('function: get_screen_size called')
@@ -758,10 +743,9 @@ class mosakuWM:
             else:
                 self.move_window_to_monitor(window, dst)
         self.monitor_geometries = updated_geometries
-
         # monitor再構成後、全ウィンドウのmonitor割当を再計算
-        # for window in self.managed_windows.keys():
-        #     self.managed_windows[window] = self.get_monitor_geometry_with_window(window)
+        for window in self.managed_windows.keys():
+            self.maximize_window(window, HORIZONTAL | VERTICAL)
 
     def parse_xmodmap(self):
         debug('function: parse_xmodmap called')
@@ -782,21 +766,21 @@ class mosakuWM:
         if window not in self.exposed_windows:
             debug('debug: at maximize_window window is not in exposed_windows')
             return
-        # managed_windows は辞書
         monitor = self.managed_windows.get(window, None)
         if monitor is None:
             return
+        eff_monitor = self.get_effective_monitor_geometry(monitor)
         geom = self.get_window_geometry(window)
         x = geom.x
         y = geom.y
         width = geom.width
         height = geom.height
         if mask & VERTICAL != 0:
-            y = monitor['y']
-            height = monitor['height']
+            y = eff_monitor['y']
+            height = eff_monitor['height']
         if mask & HORIZONTAL != 0:
-            x = monitor['x']
-            width = monitor['width']
+            x = eff_monitor['x']
+            width = eff_monitor['width']
         window.configure(
             x=x,
             y=y,
@@ -837,7 +821,6 @@ class mosakuWM:
 
     def move_window_to_monitor(self, window, dst):
         debug('function: move_window_to_monitor called')
-        # dst must be a geometry.
         if window not in self.managed_windows.keys():
             return
         src = self.managed_windows.get(window, None)
@@ -846,13 +829,15 @@ class mosakuWM:
         wgeom = self.get_window_geometry(window)
         if wgeom is None:
             return
-        hratio = dst['width']/src['width']
-        vratio = dst['height']/src['height']
+        eff_dst = self.get_effective_monitor_geometry(dst)
+        eff_src = self.get_effective_monitor_geometry(src)
+        hratio = eff_dst['width']/eff_src['width']
+        vratio = eff_dst['height']/eff_src['height']
         x,y,width,height = wgeom.x, wgeom.y, wgeom.width, wgeom.height
-        xd = x - src['x']
-        yd = y - src['y']
-        x = int(xd * hratio) + dst['x']
-        y = int(yd * vratio) + dst['y']
+        xd = x - eff_src['x']
+        yd = y - eff_src['y']
+        x = int(xd * hratio) + eff_dst['x']
+        y = int(yd * vratio) + eff_dst['y']
         width = int(width * hratio)
         height = int(height * vratio)
         window.configure(
@@ -1053,6 +1038,7 @@ class mosakuWM:
         monitor = self.managed_windows.get(window, None)
         if monitor is None:
             return
+        eff_monitor = self.get_effective_monitor_geometry(monitor)
         target_windows = []
         for win in self.exposed_windows:
             if monitor == self.managed_windows.get(win, None):
@@ -1074,14 +1060,14 @@ class mosakuWM:
                 if not target_windows:
                     break
                 win = target_windows.pop(0)
-                x = monitor['x'] + monitor['width']*col//ncols
-                width = monitor['width']//ncols
+                x = eff_monitor['x'] + eff_monitor['width']*col//ncols
+                width = eff_monitor['width']//ncols
                 if row == 1 and col < offcuts_num:
-                    height = monitor['height']*2//nrows
-                    y = 0 + monitor['y']
+                    height = eff_monitor['height']*2//nrows
+                    y = 0 + eff_monitor['y']
                 else:
-                    height = monitor['height']//nrows
-                    y = monitor['y'] + monitor['height']*row//nrows
+                    height = eff_monitor['height']//nrows
+                    y = eff_monitor['y'] + eff_monitor['height']*row//nrows
                 win.configure(x=x, y=y, width=width, height=height)
         window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
 
@@ -1490,6 +1476,9 @@ class mosakuWM:
         new_geometries = self.get_available_monitor_geometries()
         if new_geometries != self.monitor_geometries:
             self.reconfigure_monitors(False)
+        # xpymon状態に応じて全ウィンドウを再配置
+        for window in self.managed_windows:
+            self.maximize_window(window, HORIZONTAL | VERTICAL)
         debug(f'[cb_force_external_monitor] monitor_geometries: {self.monitor_geometries}')
 
     def loop(self):
