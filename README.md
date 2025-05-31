@@ -1,7 +1,7 @@
 # mosakuwm
 
 ## 概要
-mosakuwmは、OSS である[xpywm](https://github.com/h-ohsaki/xpywm)をベースとして開発されたX11ウィンドウマネージャです。マルチモニタ環境への対応、仮想デスクトップ機能、柔軟なキーバインド設定、外部ツールとの連携、画面録画機能など、多彩な機能を備えています。
+mosakuwmは、OSS である [xpywm](https://github.com/h-ohsaki/xpywm) をベースとして開発されたX11ウィンドウマネージャです。マルチモニタ環境への対応、仮想デスクトップ機能、柔軟なキーバインド設定、外部ツールとの連携、画面録画機能など、多彩な機能を備えています。
 
 本プロジェクトの開発は、[xpywm](https://github.com/h-ohsaki/xpywm) および [hogewm](https://github.com/void-hoge/hogewm) の設計と実装から多くを学び、それらに独自の機能拡張を重ねる形で進めてまいりました。両プロジェクトの開発者の皆様に、心より感謝申し上げます。
 ## 特徴
@@ -97,5 +97,5 @@ GPL-3.0 License
 
 ---
 
-本プロジェクトはxpywmおよびhogewmの開発者に深く感謝しつつ、両プロジェクトを参考に独自の工夫を加えたものです。自由にご利用・改変・配布してください。
+本プロジェクトは[xpywm](https://github.com/h-ohsaki/xpywm) および [hogewm](https://github.com/void-hoge/hogewm) の開発者の皆様に深く感謝しつつ、両プロジェクトを参考に独自の工夫を加えたものです。自由にご利用・改変・配布してください。
 
