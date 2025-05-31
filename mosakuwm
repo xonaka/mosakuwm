@@ -634,12 +634,26 @@ class mosakuWM:
         if self.xpymon_visible:
             os.system(f'pkill xpymon')
             self.xpymon_visible = False
+            # xpymon非表示時: y-8, height+8
+            for window in self.managed_windows:
+                geom = self.get_window_geometry(window)
+                if geom is None:
+                    continue
+                # 既にy<=8なら0に戻す
+                new_y = geom.y - 8 if geom.y >= 8 else 0
+                new_height = geom.height + 8
+                window.configure(x=geom.x, y=new_y, width=geom.width, height=new_height)
         else:
             os.system(f'xpymon &')
             self.xpymon_visible = True
-        # xpymon状態に応じて全ウィンドウを再配置
-        for window in self.managed_windows:
-            self.maximize_window(window, HORIZONTAL | VERTICAL)
+            # xpymon表示時: y+8, height-8
+            for window in self.managed_windows:
+                geom = self.get_window_geometry(window)
+                if geom is None:
+                    continue
+                new_y = geom.y + 8
+                new_height = max(geom.height - 8, 1)  # 高さが1未満にならないように
+                window.configure(x=geom.x, y=new_y, width=geom.width, height=new_height)
         self.draw_frame_windows()
 
     def get_screen_size(self):
@@ -1476,9 +1490,18 @@ class mosakuWM:
         new_geometries = self.get_available_monitor_geometries()
         if new_geometries != self.monitor_geometries:
             self.reconfigure_monitors(False)
-        # xpymon状態に応じて全ウィンドウを再配置
-        for window in self.managed_windows:
-            self.maximize_window(window, HORIZONTAL | VERTICAL)
+        # xpymon状態に応じて全ウィンドウを再配置（ウィンドウサイズ・位置は変更しない仕様に変更）
+        # for window in self.managed_windows:
+        #     geom = self.get_window_geometry(window)
+        #     if geom is None:
+        #         continue
+        #     if self.xpymon_visible:
+        #         new_y = geom.y + 8
+        #         new_height = max(geom.height - 8, 1)
+        #     else:
+        #         new_y = geom.y - 8 if geom.y >= 8 else 0
+        #         new_height = geom.height + 8
+        #     window.configure(x=geom.x, y=new_y, width=geom.width, height=new_height)
         debug(f'[cb_force_external_monitor] monitor_geometries: {self.monitor_geometries}')
 
     def loop(self):

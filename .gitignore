@@ -45,4 +45,10 @@ logs/
 .env
 .venv
 venv/
-ENV/ 
+ENV/
+
+# pytestのテストファイル
+__tests__/
+tests/
+test_*.py
+*_test.py 
