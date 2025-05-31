@@ -88,14 +88,14 @@ KEY_BINDS = {
     ('9', X.Mod1Mask | X.ControlMask): {    
         'command': 'pkill obsidian || obsidian &'
     },
-    ('v', X.Mod1Mask | X.ControlMask):{
-        'command': 'pkill mosakumonitor || mosakumonitor 1 &'
-    },
     ('p', X.Mod1Mask | X.ControlMask): {
         'command': 'pkill xkbpointer && xset r || xkbpointer &' 
     },
     ('F11', X.Mod1Mask): {
         'command': 'mp4totxt &',
+    },
+    ('0', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_toggle_monitor_local_selection'
     },
 
     # --- ウィンドウ操作系 ---
@@ -265,6 +265,9 @@ class mosakuWM:
         self.maxsize = self.get_screen_size()
         # --- xpymon表示状態の管理（create_selection_windowより前に初期化） ---
         self.xpymon_visible = False  # xpymon表示状態を管理
+        # --- 追加: モニタ内ウィンドウ遷移用フラグとリスト ---
+        self.is_monitor_local_selection = False
+        self.local_monitor_windows = []
         # --- Xイベントのグラブ・初期ウィンドウ管理 ---
         self.catch_events()
         self.grab_keys()
@@ -555,27 +558,29 @@ class mosakuWM:
 
     def focus_next_window(self, window, direction=FORWARD):
         debug('function: focus_next_window called')
-        # exposed_windowsはwindowインスタンスが格納された配列
-        if not self.exposed_windows:
+        # モニタ内遷移モード時はlocal_monitor_windowsを使う
+        if self.is_monitor_local_selection and self.local_monitor_windows:
+            target_windows = self.local_monitor_windows
+        else:
+            target_windows = self.exposed_windows
+        if not target_windows:
             return
-        if window in self.exposed_windows:
-            idx = self.exposed_windows.index(window)
-
+        if window in target_windows:
+            idx = target_windows.index(window)
             if direction == FORWARD:
-                nextidx = (idx+1)%len(self.exposed_windows)
-                while self.exposed_windows[nextidx] in self.coverdwindows:                    
-                    nextidx = (nextidx+1)%len(self.exposed_windows)                
+                nextidx = (idx+1)%len(target_windows)
+                while target_windows[nextidx] in self.coverdwindows:                    
+                    nextidx = (nextidx+1)%len(target_windows)                
                 idx = nextidx
             else:
-                nextidx = (idx-1)%len(self.exposed_windows)
-                while self.exposed_windows[nextidx] in self.coverdwindows:                    
-                    nextidx = (nextidx-1)%len(self.exposed_windows)                
+                nextidx = (idx-1)%len(target_windows)
+                while target_windows[nextidx] in self.coverdwindows:                    
+                    nextidx = (nextidx-1)%len(target_windows)                
                 idx = nextidx                
-            next_window = self.exposed_windows[idx]
+            next_window = target_windows[idx]
         else:
-            next_window = self.exposed_windows[0]
+            next_window = target_windows[0]
         self.focus_window(next_window)
-        # マウスポインターを warp_pointer メソッドを使用してnext_window内の特定の位置に移動する
         next_window.warp_pointer(INIT_PTR_POS, INIT_PTR_POS)
 
     def get_window_geometry(self, window):
@@ -1506,6 +1511,27 @@ class mosakuWM:
         #         new_height = geom.height + 8
         #     window.configure(x=geom.x, y=new_y, width=geom.width, height=new_height)
         debug(f'[cb_force_external_monitor] monitor_geometries: {self.monitor_geometries}')
+
+    def cb_toggle_monitor_local_selection(self, event):
+        """
+        Ctrl+Alt+0で現在のモニタ内ウィンドウ遷移モードをトグルする
+        """
+        if not self.is_monitor_local_selection:
+            window = self.framed_window
+            if window is None:
+                return
+            monitor = self.managed_windows.get(window, None)
+            if monitor is None:
+                return
+            self.local_monitor_windows = [
+                win for win in self.exposed_windows
+                if self.managed_windows.get(win, None) == monitor
+            ]
+            if len(self.local_monitor_windows) > 1:
+                self.is_monitor_local_selection = True
+        else:
+            self.is_monitor_local_selection = False
+            self.local_monitor_windows = []
 
     def loop(self):
         debug('function: loop called')
