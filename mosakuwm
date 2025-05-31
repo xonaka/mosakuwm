@@ -85,6 +85,9 @@ KEY_BINDS = {
     ('8', X.Mod1Mask | X.ControlMask):{
         'command' : 'pkill mpg321 || mpg321 ~/Music/pianotoame &'
     },
+    ('9', X.Mod1Mask | X.ControlMask): {    
+        'command': 'pkill obsidian || obsidian &'
+    },
     ('v', X.Mod1Mask | X.ControlMask):{
         'command': 'pkill mosakumonitor || mosakumonitor 1 &'
     },
