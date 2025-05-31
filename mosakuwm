@@ -94,7 +94,8 @@ KEY_BINDS = {
     ('F11', X.Mod1Mask): {
         'command': 'mp4totxt &',
     },
-    ('0', X.Mod1Mask | X.ControlMask): {
+    # --- モニタ内ウィンドウ遷移モード ---
+    # Ctrl+Alt+0で「現在のモニタ内のウィンドウだけを遷移」するローカル選択モード
         'method': 'cb_toggle_monitor_local_selection'
     },
 
@@ -1514,7 +1515,11 @@ class mosakuWM:
 
     def cb_toggle_monitor_local_selection(self, event):
         """
-        Ctrl+Alt+0で現在のモニタ内ウィンドウ遷移モードをトグルする
+        モニタ内ウィンドウ遷移モード（Ctrl+Alt+0）
+        - 有効化時: 現在フォーカス中ウィンドウが属するモニタ内のウィンドウのみを対象に遷移
+        - 無効化時: 全ウィンドウを対象に通常の遷移に戻す
+        - デュアル・マルチモニタ環境で、特定モニタ内だけでウィンドウを切り替えたい場合に便利
+        例: 外部ディスプレイで作業中、他モニタのウィンドウに邪魔されずに切り替えたいとき等
         """
         if not self.is_monitor_local_selection:
             window = self.framed_window
