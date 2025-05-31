@@ -94,11 +94,6 @@ KEY_BINDS = {
     ('F11', X.Mod1Mask): {
         'command': 'mp4totxt &',
     },
-    # --- モニタ内ウィンドウ遷移モード ---
-    # Ctrl+Alt+0で「現在のモニタ内のウィンドウだけを遷移」するローカル選択モード
-        'method': 'cb_toggle_monitor_local_selection'
-    },
-
     # --- ウィンドウ操作系 ---
     # フォーカス・移動・分割・最大化
     ('i', X.Mod1Mask | X.ControlMask): {
@@ -146,6 +141,11 @@ KEY_BINDS = {
     },
     ('BackSpace', X.Mod1Mask | X.ControlMask): {
         'method': 'cb_set_always_top'
+    },
+    # --- モニタ内ウィンドウ遷移モード ---
+    # Ctrl+Alt+0で「現在のモニタ内のウィンドウだけを遷移」するローカル選択モードをトグル
+    ('0', X.Mod1Mask | X.ControlMask): {
+        'method': 'cb_toggle_monitor_local_selection'
     },
     ('b', X.Mod1Mask | X.ControlMask): {
         'method': 'cb_force_external_monitor'
