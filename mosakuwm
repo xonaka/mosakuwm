@@ -294,6 +294,7 @@ class mosakuWM:
         # --- 一度でも現れた外部出力名を記憶 ---
         self.known_external_outputs = set()
         self.update_known_external_outputs()
+        self.xpymon_visible = False  # xpymon表示状態を管理
 
     def update_known_external_outputs(self):
         debug('function: update_known_external_outputs called')
@@ -620,16 +621,15 @@ class mosakuWM:
     def toggle_xpymon_and_adjust_windows(self, event):
         debug('function: toggle_xpymon_and_adjust_windows called')
         """
-        xpymonの起動/終了に応じて、全ウィンドウとモニタのサイズ・位置を調整する。
+        xpymonの起動/終了に応じて、全ウィンドウのサイズ・位置を調整する。
         - xpymonが起動していれば終了し、全ウィンドウを拡大
         - xpymonが停止していれば起動し、全ウィンドウを縮小
-        注意: モニタのy座標・高さを8px単位で調整
+        注意: monitor_geometriesは物理値のまま保持
         """
-        if os.system(f'pkill xpymon')==0:
-            for monitor in self.monitor_geometries.values():
-                monitor['height'] += 8
-                monitor['y'] -= 8
-            for window in self.managed_windows:                
+        if self.xpymon_visible:
+            os.system(f'pkill xpymon')
+            self.xpymon_visible = False
+            for window in self.managed_windows:
                 geom = self.get_window_geometry(window)
                 x = geom.x
                 y = geom.y - 8
@@ -643,10 +643,8 @@ class mosakuWM:
             self.draw_frame_windows()
         else:
             os.system(f'xpymon &')
-            for monitor in self.monitor_geometries.values():
-                monitor['height'] -= 8
-                monitor['y'] += 8
-            for window in self.managed_windows:                
+            self.xpymon_visible = True
+            for window in self.managed_windows:
                 geom = self.get_window_geometry(window)
                 x = geom.x
                 y = geom.y + 8
