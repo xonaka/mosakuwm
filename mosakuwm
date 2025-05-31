@@ -147,6 +147,8 @@ KEY_BINDS = {
     ('0', X.Mod1Mask | X.ControlMask): {
         'method': 'cb_toggle_monitor_local_selection'
     },
+    # --- 外部モニタ強制切替 ---
+    # Ctrl+Alt+bで外部モニタのon/offや再構成を強制的に実行
     ('b', X.Mod1Mask | X.ControlMask): {
         'method': 'cb_force_external_monitor'
     },
@@ -1474,6 +1476,14 @@ class mosakuWM:
         return outputs
 
     def cb_force_external_monitor(self, event):
+        """
+        外部モニタ強制切替（cb_force_external_monitor）
+
+        - **Ctrl+Alt+b** で実行
+        - 既知の外部モニタ（HDMI/DP等）をon/offし、必要に応じて再構成
+        - 例えば「外部ディスプレイを一時的に切り離したい」「認識し直したい」場合などに便利
+        - 内蔵ディスプレイはoffにしない
+        """
         debug('function: cb_force_external_monitor called')
         self.update_known_external_outputs()
         outputs = self.get_current_outputs()
