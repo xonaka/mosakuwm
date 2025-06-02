@@ -136,6 +136,9 @@ KEY_BINDS = {
     ('n', X.Mod1Mask | X.ControlMask): {
         'method': 'cb_move_window_to_next_monitor'
     },
+    ('n', X.Mod1Mask | X.ControlMask | X.ShiftMask): {
+        'method': 'cb_move_pointer_to_next_monitor'
+    },
     ('s', X.Mod1Mask | X.ControlMask):{
         'method': 'cb_swap_windows_bw_monitors'
     },
@@ -213,9 +216,6 @@ KEY_BINDS = {
         'method': 'cb_record_screen',
          'arg': 'current'
     },    
-    ('n', X.Mod1Mask | X.ControlMask | X.ShiftMask): {
-        'method': 'cb_move_pointer_to_next_monitor'
-    },
 }
 
 def debug(str):
@@ -1561,7 +1561,7 @@ class mosakuWM:
 
     def cb_move_pointer_to_next_monitor(self, event):
         """
-        デュアル/マルチモニタ時に、マウスカーソルを隣のモニタの左上(30,30)に移動する
+        デュアル/マルチモニタ時に、マウスカーソルを隣のモニタの中央に移動する
         """
         pointer = self.screen.root.query_pointer()
         x, y = pointer.root_x, pointer.root_y
@@ -1579,8 +1579,10 @@ class mosakuWM:
         next_idx = (idx + 1) % len(monitors)
         next_monitor = monitors[next_idx]
         eff_next = self.get_effective_monitor_geometry(next_monitor)
-        # (30,30)に固定
-        self.screen.root.warp_pointer(eff_next['x'] + 30, eff_next['y'] + 30)
+        # 中央座標にワープ
+        center_x = eff_next['x'] + eff_next['width'] // 2
+        center_y = eff_next['y'] + eff_next['height'] // 2
+        self.screen.root.warp_pointer(center_x, center_y)
         self.display.sync()
 
     def loop(self):
